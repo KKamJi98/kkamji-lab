@@ -1,0 +1,10 @@
+apiVersion: v2
+name: music
+description: A Helm chart for Music service
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+dependencies:
+  - name: postgresql
+    version: 18.1.1 # 수정
+    repository: "https://charts.bitnami.com/bitnami"

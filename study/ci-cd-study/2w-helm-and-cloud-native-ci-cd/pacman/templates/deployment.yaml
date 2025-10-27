@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name}}            # Chart.yaml 파일에 설정된 이름을 가져와 설정
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name}}
+    {{- if .Chart.AppVersion }}     # Chart.yaml 파일에 appVersion 여부에 따라 버전을 설정
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}     # appVersion 값을 가져와 지정하고 따움표 처리
+    {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}     # replicaCount 속성을 넣을 자리 placeholder
+  selector:
+    matchLabels:
+      {{- include "pacman.selectorLabels" . | nindent 6 }}   # pacman.selectorLabels를 호출한 결과를 6만큼 들여쓰기하여 주입
+  template:
+    metadata:
+      labels:
+        {{- include "pacman.selectorLabels" . | nindent 8 }} # pacman.selectorLabels를 호출한 결과를 8만큼 들여쓰기하여 주입
+    spec:
+      containers:
+        - image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion}}"   # 이미지 지정 placeholder, 이미지 태그가 있으면 넣고, 없으면 Chart.yaml에 값을 설정
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 14 }} # securityContext의 값을 YAML 객체로 지정하며 14칸 들여쓰기
+          name: {{ .Chart.Name}}
+          ports:
+            - containerPort: {{ .Values.image.containerPort }}
+              name: http
+              protocol: TCP
