@@ -1,0 +1,34 @@
+services:
+
+  jenkins:
+    container_name: jenkins
+    image: jenkins/jenkins
+    restart: unless-stopped
+    networks:
+      - kind
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - jenkins_home:/var/jenkins_home
+
+  gogs:
+    container_name: gogs
+    image: gogs/gogs
+    restart: unless-stopped
+    networks:
+      - kind
+    ports:
+      - "10022:22"
+      - "3000:3000"
+    volumes:
+      - gogs-data:/data
+
+volumes:
+  jenkins_home:
+  gogs-data:
+
+networks:
+  kind:
+    external: true
