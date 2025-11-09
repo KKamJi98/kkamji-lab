@@ -1,0 +1,9 @@
+dex:
+  enabled: false
+
+server:
+  service:
+    type: NodePort
+    nodePortHttps: 30002
+  extraArgs:
+    - --insecure  # HTTPS 대신 HTTP 사용
