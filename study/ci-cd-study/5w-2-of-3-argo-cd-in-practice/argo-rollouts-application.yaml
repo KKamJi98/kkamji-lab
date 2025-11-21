@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rollout-test
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/KKamJi98/kkamji-lab
+    targetRevision: HEAD
+    path: study/ci-cd-study/5w-2-of-3-argo-cd-in-practice/argo-rollouts
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: test
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true

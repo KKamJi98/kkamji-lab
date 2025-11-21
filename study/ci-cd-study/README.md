@@ -33,6 +33,4 @@
 
 ## 관련 자료
 
-## 관련 자료
-
-- **[GitOps Cookbook](https://www.packtpub.com/product/gitops-cookbook/9781801072360)**: 스터디의 기반이 된 원서입니다.
+- **[GitOps Cookbook](https://www.packtpub.com/product/gitops-cookbook/9781801072360)**: 스터디의 기반이 된 원서입니다

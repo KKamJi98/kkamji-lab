@@ -1,0 +1,15 @@
+global:
+  domain: argocd.example.com
+
+# TLS certificate configuration via cert-manager # 해당 부분은 빼도 되겠네요
+certificate: 
+  enabled: true
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    tls: true
