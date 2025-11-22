@@ -16,4 +16,4 @@ image:
 
 replicaCount: 1
 
-nodePort: 31000
+nodePort: 41000
