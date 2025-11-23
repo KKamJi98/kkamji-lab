@@ -1,0 +1,6 @@
+server:
+  service:
+    type: NodePort
+    nodePortHttps: 30000
+  extraArgs:
+    - --insecure
