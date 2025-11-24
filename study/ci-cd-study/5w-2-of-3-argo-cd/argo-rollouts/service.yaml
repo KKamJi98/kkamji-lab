@@ -4,9 +4,9 @@ metadata:
   name: rollouts-demo
 spec:
   ports:
-  - port: 80
-    targetPort: http
-    protocol: TCP
-    name: http
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
   selector:
     app: rollouts-demo
