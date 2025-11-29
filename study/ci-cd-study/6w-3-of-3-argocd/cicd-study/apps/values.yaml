@@ -3,7 +3,7 @@ config:
     destination:
       server: https://kubernetes.default.svc
     source:
-      repoURL: https://github.com/gasida/cicd-study
+      repoURL: https://github.com/KKamJi98/kkamji-lab
       targetRevision: main
 
 applications:
