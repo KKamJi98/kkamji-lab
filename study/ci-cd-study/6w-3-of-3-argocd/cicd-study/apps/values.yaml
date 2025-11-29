@@ -8,8 +8,11 @@ config:
 
 applications:
   - name: helm-guestbook
+    path: study/ci-cd-study/6w-3-of-3-argocd/cicd-study/helm-guestbook
     tool:
       helm:
         releaseName: helm-guestbook
   - name: kustomize-guestbook
+    path: study/ci-cd-study/6w-3-of-3-argocd/cicd-study/kustomize-guestbook
   - name: sync-waves
+    path: study/ci-cd-study/6w-3-of-3-argocd/cicd-study/sync-waves
