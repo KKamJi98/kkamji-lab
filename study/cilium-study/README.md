@@ -1,70 +1,243 @@
-# # `CloudNet@` Gasida님이 진행하는 Cilium Study - 1기 정리내용
+# Cilium Study - Season 1
 
-Vagrant와 VirtualBox를 사용하여 Kubernetes 클러스터를 구축하고 Cilium을 테스트하기 위한 실습 환경입니다.
+`CloudNet@` 커뮤니티의 Gasida님이 진행하신 Cilium 스터디 1기 학습 자료입니다.
+
+Vagrant와 VirtualBox를 사용하여 Kubernetes 클러스터를 자동으로 구축하고, eBPF 기반의 고성능 CNI인 Cilium을 실습합니다.
+
+## Cilium이란?
+
+**Cilium**은 eBPF(extended Berkeley Packet Filter)를 기반으로 한 오픈소스 네트워킹, 보안, 관측성 솔루션입니다. Linux 커널에서 직접 네트워크 패킷을 처리하여 기존 `kube-proxy`보다 뛰어난 성능을 제공합니다.
+
+### 주요 특징
+
+| 기능 | 설명 |
+|------|------|
+| **eBPF 기반 데이터플레인** | 커널 레벨에서 패킷 처리, iptables 대비 높은 성능 |
+| **kube-proxy 대체** | 완전한 kube-proxy replacement 모드 지원 |
+| **네트워크 정책** | L3/L4/L7 레벨의 세밀한 네트워크 정책 적용 |
+| **Hubble** | 네트워크 흐름 관측성 및 서비스 맵 시각화 |
+| **서비스 메시** | 사이드카 없는 서비스 메시 구현 가능 |
+| **멀티 클러스터** | Cluster Mesh를 통한 멀티 클러스터 네트워킹 |
 
 ## 프로젝트 구조
 
 ```
 .
-├── helm/                  # Cilium, Flannel 등 Helm 차트 값 파일
-│   ├── cilium/
-│   └── monitoring/
-├── install-flannel/       # Flannel CNI 설치 관련 파일
-├── scripts/               # 클러스터 구성 및 관리를 위한 헬퍼 스크립트
-└── vagrant/               # Vagrant를 이용한 Kubernetes 클러스터 구성 환경
-    ├── vagrant-advanced/  # Kubeadm YAML 설정을 사용한 고급 구성
-    └── vagrant-original/  # Kubeadm 명령줄 인자를 사용한 기본 구성
+├── helm/                      # Helm 차트 values 파일
+│   ├── cilium/               # Cilium 설치 설정
+│   │   ├── cilium-values-lab.yaml    # 실습용 (고정 IP)
+│   │   └── cilium-values-kkamji.yaml # 유연한 설정 (자동 탐지)
+│   └── monitoring/           # 모니터링 도구 설정 (예정)
+│
+├── install-flannel/          # Flannel CNI 대안 설치
+│   └── flannel-values.yaml   # Flannel Helm values
+│
+├── scripts/                  # 유틸리티 스크립트
+│   ├── check-cilium-kernel-cfg.sh  # 커널 설정 검사
+│   ├── setup_cilium_kernel.sh      # 커널 모듈 자동 로드
+│   ├── rollout-restart-all.sh      # 전체 워크로드 재시작
+│   └── setup-kubecontext.sh        # 로컬 kubectl 설정
+│
+├── tests/                    # 테스트용 샘플 애플리케이션
+│   └── README.md             # 배포 예제 코드
+│
+└── vagrant/                  # Kubernetes 클러스터 환경
+    ├── vagrant-original/     # CLI 기반 kubeadm 구성
+    └── vagrant-advanced/     # YAML 기반 선언적 구성 (권장)
+```
+
+## 실습 환경 아키텍처
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Host Machine                              │
+│  (VirtualBox + Vagrant)                                         │
+│                                                                  │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
+│  │   cilium-m1     │  │   cilium-w1     │  │   cilium-w2     │ │
+│  │  (Master Node)  │  │  (Worker Node)  │  │  (Worker Node)  │ │
+│  │                 │  │                 │  │                 │ │
+│  │  192.168.10.100 │  │  192.168.10.101 │  │  192.168.10.102 │ │
+│  │                 │  │                 │  │                 │ │
+│  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │ │
+│  │  │  Cilium   │  │  │  │  Cilium   │  │  │  │  Cilium   │  │ │
+│  │  │  Agent    │  │  │  │  Agent    │  │  │  │  Agent    │  │ │
+│  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │ │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
+│                                                                  │
+│  Pod CIDR: 10.10.0.0/16                                         │
+│  Service CIDR: 10.200.0.0/16                                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## 시작하기
+
+### 1. 사전 요구사항
+
+```bash
+# macOS
+brew install vagrant
+brew install --cask virtualbox
+
+# Ubuntu/Debian
+sudo apt install vagrant virtualbox
+```
+
+### 2. 클러스터 구축 (권장: vagrant-advanced)
+
+```bash
+# 고급 설정 환경으로 이동 (kube-proxy 비활성화 포함)
+cd vagrant/vagrant-advanced
+
+# VM 생성 및 Kubernetes 클러스터 구축
+vagrant up
+
+# Master 노드 접속
+vagrant ssh cilium-m1
+
+# 클러스터 상태 확인
+kubectl get nodes
+
+# kube-proxy가 비활성화된 것 확인
+kubectl get ds -n kube-system kube-proxy
+# 결과: No resources found
+```
+
+### 3. Cilium 설치
+
+```bash
+# Cilium Helm 리포지토리 추가
+helm repo add cilium https://helm.cilium.io/
+helm repo update
+
+# Cilium 설치 (values 파일 사용)
+helm install cilium cilium/cilium \
+  --namespace kube-system \
+  -f /vagrant/helm/cilium/cilium-values-lab.yaml
+
+# 설치 상태 확인
+kubectl get pods -n kube-system -l k8s-app=cilium
+
+# Cilium CLI로 상태 확인 (선택)
+cilium status
+```
+
+### 4. 로컬에서 kubectl 사용 (선택)
+
+```bash
+# 로컬 머신에서 실행
+cd scripts
+./setup-kubecontext.sh
+
+# 컨텍스트 전환
+kubectl config use-context cilium-cluster
 ```
 
 ## 디렉토리 상세 설명
 
-### `vagrant`
+### `vagrant/`
 
-두 가지 버전의 Kubernetes 클러스터 구성 환경을 제공합니다.
+두 가지 클러스터 구성 방식을 제공합니다:
 
-- **`vagrant-original/`**: `kubeadm`의 모든 옵션을 명령줄 인자로 전달하는 전통적인 방식을 사용하여 Kubernetes 클러스터를 구성합니다.
-- **`vagrant-advanced/`**: `kubeadm`의 `InitConfiguration`, `JoinConfiguration` 등 YAML 설정 파일을 사용하여 좀 더 선언적이고 체계적인 방식으로 Kubernetes 클러스터를 구성합니다. (Cilium 설치 시 `kube-proxy` 제외 구성 포함)
+| 환경 | 특징 | 권장 용도 |
+|------|------|----------|
+| `vagrant-original/` | kubeadm CLI 옵션 기반 | 기본 구성 학습 |
+| `vagrant-advanced/` | kubeadm YAML 설정 기반 | Cilium 실습 (kube-proxy 제외) |
 
-각 디렉토리의 `Vagrantfile`을 통해 Master Node 1대, Worker Node 2대의 가상머신을 생성하고 클러스터를 구축합니다.
+### `helm/cilium/`
 
-### `helm`
+| 파일 | k8sServiceHost | 특징 |
+|------|----------------|------|
+| `cilium-values-lab.yaml` | `192.168.10.100` (고정) | 실습 환경 최적화 |
+| `cilium-values-kkamji.yaml` | `auto` (자동 탐지) | 다양한 환경 호환 |
 
-Cilium 및 모니터링 관련 Helm 차트의 `values.yaml` 파일들을 관리합니다.
+**공통 활성화 기능:**
 
-- **`helm/cilium/`**: Cilium 설치 시 사용하는 `values.yaml` 파일이 있습니다.
-  - `cilium-values-lab.yaml`: 실습 환경에 최적화된 기본 값 파일입니다. (`k8sServiceHost` 고정)
-  - `cilium-values-kkamji.yaml`: `k8sServiceHost`를 자동으로 탐지하는 등 좀 더 유연한 설정입니다.
-- **`helm/monitoring/`**: 향후 모니터링 도구(Prometheus, Grafana 등)를 위한 설정 파일을 위치시킬 공간입니다.
+- Hubble (네트워크 관측성)
+- Prometheus 메트릭 노출
+- Native Routing 모드
+- kube-proxy 대체 (strict 모드)
+- Host Firewall
 
-### `install-flannel`
+### `scripts/`
 
-Cilium 대신 Flannel CNI를 설치할 경우 사용하는 `flannel-values.yaml` 파일이 있습니다.
+| 스크립트 | 용도 |
+|----------|------|
+| `check-cilium-kernel-cfg.sh` | Cilium 커널 요구사항 검사 |
+| `setup_cilium_kernel.sh` | 누락된 커널 모듈 자동 로드 |
+| `rollout-restart-all.sh` | 전체 워크로드 롤아웃 재시작 |
+| `setup-kubecontext.sh` | 로컬 kubeconfig 설정 |
 
-### `scripts`
+### `install-flannel/`
 
-클러스터 설치 및 운영을 돕는 다양한 유틸리티 스크립트가 있습니다.
+Cilium 대신 Flannel CNI를 사용하고자 할 때 참고하세요.
 
-- `check-cilium-kernel-cfg.sh`: Cilium 실행에 필요한 커널 옵션이 활성화되어 있는지 확인합니다.
-- `setup_cilium_kernel.sh`: 필요한 커널 모듈을 확인하고, 비활성화된 경우 자동으로 로드합니다.
-- `rollout-restart-all.sh`: 클러스터 내 모든 주요 워크로드(Deployment, StatefulSet, DaemonSet)를 재시작합니다.
-- `setup-kubecontext.sh`: 로컬 머신에서 `kubectl`을 사용하여 원격 클러스터를 제어할 수 있도록 `~/.kube/config` 파일을 자동으로 설정합니다.
+```bash
+helm repo add flannel https://flannel-io.github.io/flannel/
+helm install flannel flannel/flannel \
+  --namespace kube-flannel --create-namespace \
+  -f flannel-values.yaml
+```
 
-## 시작하기
+## 주요 학습 주제
 
-1.  **Vagrant 및 VirtualBox 설치**: 로컬 환경에 Vagrant와 VirtualBox를 설치합니다.
-2.  **Vagrant 환경 선택**: `vagrant-original` 또는 `vagrant-advanced` 디렉토리로 이동합니다.
-3.  **Vagrant 실행**: 다음 명령어를 실행하여 가상 머신을 생성하고 Kubernetes 클러스터 구축을 시작합니다.
-    ```bash
-    vagrant up
-    ```
-4.  **클러스터 확인**: 프로비저닝이 완료되면 Master Node에 접속하여 클러스터 상태를 확인할 수 있습니다.
-    ```bash
-    vagrant ssh cilium-m1
-    kubectl get nodes
-    ```
-5.  **로컬에서 `kubectl` 사용 (선택 사항)**: `scripts/setup-kubecontext.sh` 스크립트를 실행하여 로컬에서 클러스터를 제어할 수 있습니다.
+### Week 1-2: 기본 환경 구축
 
-## CNI 설치
+- Vagrant를 활용한 멀티 노드 클러스터 구축
+- kubeadm의 InitConfiguration/JoinConfiguration 이해
+- Cilium 설치 및 기본 동작 확인
 
-- **Cilium**: `vagrant-advanced` 환경에서는 `kube-proxy`가 비활성화된 상태로 클러스터가 구성되므로, Cilium을 설치하는 것이 권장됩니다. `helm/cilium`의 `values.yaml` 파일을 사용하여 설치를 진행할 수 있습니다.
-- **Flannel**: `install-flannel` 디렉토리의 설정 파일을 사용하여 Flannel을 설치할 수 있습니다.
+### Week 3-4: Cilium 네트워킹 심화
+
+- eBPF 데이터플레인 동작 원리
+- kube-proxy 대체 모드 분석
+- Native Routing vs Tunneling 비교
+
+### Week 5-6: 네트워크 정책 및 보안
+
+- L3/L4 네트워크 정책 작성
+- L7 정책 (HTTP, gRPC)
+- DNS 기반 정책
+
+### Week 7-8: 관측성 및 고급 기능
+
+- Hubble을 통한 네트워크 플로우 관측
+- Grafana 대시보드 구성
+- Cluster Mesh 구성 (멀티 클러스터)
+
+## 트러블슈팅
+
+### Cilium Pod가 시작되지 않는 경우
+
+```bash
+# 커널 설정 확인
+./scripts/check-cilium-kernel-cfg.sh
+
+# 필요한 커널 모듈 로드
+./scripts/setup_cilium_kernel.sh
+```
+
+### CNI 변경 후 Pod 네트워크 문제
+
+```bash
+# 모든 워크로드 재시작
+./scripts/rollout-restart-all.sh
+```
+
+### 노드 상태가 NotReady인 경우
+
+```bash
+# Cilium 상태 확인
+kubectl get pods -n kube-system -l k8s-app=cilium
+kubectl logs -n kube-system -l k8s-app=cilium
+
+# BPF 파일시스템 마운트 확인
+mount | grep bpf
+```
+
+## 참고 자료
+
+- [Cilium 공식 문서](https://docs.cilium.io/)
+- [Cilium GitHub](https://github.com/cilium/cilium)
+- [eBPF.io](https://ebpf.io/)
+- [CloudNet@ Cilium 스터디 노션](https://www.notion.so/CloudNet-Blog-c9dfa44a27ff431dafdd2edacc8a1863)
