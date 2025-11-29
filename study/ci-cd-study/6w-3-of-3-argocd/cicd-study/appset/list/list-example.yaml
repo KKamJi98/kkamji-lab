@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: guestbook
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+  - list:
+      elements:
+      - cluster: dev-k8s
+        url: https://192.168.97.3:6443
+      - cluster: prd-k8s
+        url: https://192.168.97.4:6443
+  template:
+    metadata:
+      name: '{{.cluster}}-guestbook'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/gasida/cicd-study.git
+        targetRevision: HEAD
+        path: appset/list/guestbook/{{.cluster}}
+      destination:
+        server: '{{.url}}'
+        namespace: guestbook

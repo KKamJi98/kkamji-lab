@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nginx-chart
+description: A Helm chart for deploying Nginx with custom index.html
+type: application
+version: 1.0.0
+appVersion: "1.26.1"

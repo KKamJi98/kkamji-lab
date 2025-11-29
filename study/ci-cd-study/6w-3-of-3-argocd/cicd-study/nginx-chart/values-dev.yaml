@@ -1,0 +1,19 @@
+indexHtml: |
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <title>Welcome to Nginx!</title>
+  </head>
+  <body>
+    <h1>Hello, Dev - Kubernetes!</h1>
+    <p>Nginx version 1.26.1</p>
+  </body>
+  </html>
+
+image:
+  repository: nginx
+  tag: 1.26.1
+
+replicaCount: 1
+
+nodePort: 31000

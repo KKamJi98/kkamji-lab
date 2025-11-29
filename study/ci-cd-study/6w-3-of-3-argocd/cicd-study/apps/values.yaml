@@ -1,0 +1,15 @@
+config:
+  spec:
+    destination:
+      server: https://kubernetes.default.svc
+    source:
+      repoURL: https://github.com/gasida/cicd-study
+      targetRevision: main
+
+applications:
+  - name: helm-guestbook
+    tool:
+      helm:
+        releaseName: helm-guestbook
+  - name: kustomize-guestbook
+  - name: sync-waves
