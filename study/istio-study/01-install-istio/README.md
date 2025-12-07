@@ -470,26 +470,33 @@ kubectl get po details-v1-766844796b-sgdkh -o yaml | kubectl neat
 ## 5. Istio 전체 삭제 (Istio 설치에 문제가 생긴 경우)
 
 ```shell
-# BookStore App 삭제
-kubectl delete -f https://raw.githubusercontent.com/k8s-1pro/kubernetes-anotherclass-sprint5/refs/heads/main/531/bookstore-app/bookinfo.yaml
+##############################################################
+# Demo Application 및 Istio Gateway 리소스 삭제 (Istio API)
+##############################################################
+kubectl delete -f bookstore-app/bookinfo.yaml -n default
+kubectl delete -f istio-api/bookinfo-gateway.yaml -n default
 
-# Gateway, VirtualService 삭제
-kubectl delete -f https://raw.githubusercontent.com/k8s-1pro/kubernetes-anotherclass-sprint5/refs/heads/main/531/istio-api/bookinfo-gateway.yaml
+##############################################################
+# Gateway API 리소스 및 CRD 삭제
+##############################################################
+kubectl delete -f gateway-api/bookinfo-gateway.yaml -n default
+kubectl delete -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
 
-# Kubernetes Gateway API CRDs 삭제
-kubectl delete -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.3.0/standard-install.yaml
+##############################################################
+# 모니터링 스택 삭제
+##############################################################
+kubectl delete -f monitor/istiod-servicemonitor.yaml -n monitoring
+kubectl delete -f monitor/podmonitor.yaml -n monitoring
+helm uninstall monitoring -n monitoring
 
-# Gateway, HTTPRoute 삭제
-kubectl delete -f https://raw.githubusercontent.com/k8s-1pro/kubernetes-anotherclass-sprint5/refs/heads/main/531/gateway-api/bookinfo-gateway.yaml
-
+##############################################################
 # Kiali 삭제
-kubectl delete -f https://raw.githubusercontent.com/k8s-1pro/install/main/under-thesea/k8s-cluster-1.30/kiali-server-2.8.0/kiali.yaml -n istio-system 
+##############################################################
+kubectl delete -f kiali/kiali.yaml -n istio-system
 
-# Prometheus 모니터링 삭제
-kubectl delete -f https://raw.githubusercontent.com/k8s-1pro/install/main/under-thesea/k8s-cluster-1.30/kiali-server-2.8.0/istiod-servicemonitor.yaml -n monitoring
-kubectl delete -f https://raw.githubusercontent.com/k8s-1pro/install/main/under-thesea/k8s-cluster-1.30/kiali-server-2.8.0/envoy-podmonitor.yaml -n monitoring
-
+##############################################################
 # Istio 삭제
+##############################################################
 istioctl uninstall -y --purge
 kubectl delete namespace istio-system
 kubectl label namespace default istio-injection-
