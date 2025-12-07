@@ -2,7 +2,9 @@
 
 Kubernetes 클러스터의 설치, 구성 및 관리를 자동화하는 헬퍼 스크립트 모음입니다.
 
-## 스크립트 목록
+---
+
+## 1. 스크립트 목록
 
 | 스크립트 | 용도 | 실행 위치 |
 |----------|------|----------|
@@ -11,9 +13,11 @@ Kubernetes 클러스터의 설치, 구성 및 관리를 자동화하는 헬퍼 �
 | `rollout-restart-all.sh` | 전체 워크로드 재시작 | 로컬 또는 Master |
 | `setup-kubecontext.sh` | 로컬 kubeconfig 설정 | 로컬 머신 |
 
-## 스크립트 상세
+---
 
-### `check-cilium-kernel-cfg.sh`
+## 2. 스크립트 상세
+
+### 2.1. `check-cilium-kernel-cfg.sh`
 
 Cilium이 정상 동작하기 위해 필요한 Linux 커널 설정을 검사합니다.
 
@@ -51,7 +55,7 @@ Cilium이 정상 동작하기 위해 필요한 Linux 커널 설정을 검사합�
 
 ---
 
-### `setup_cilium_kernel.sh`
+### 2.2. `setup_cilium_kernel.sh`
 
 `check-cilium-kernel-cfg.sh`의 확장 버전으로, 누락된 커널 모듈을 자동으로 로드합니다.
 
@@ -86,7 +90,7 @@ echo "cls_bpf" | sudo tee -a /etc/modules-load.d/cilium.conf
 
 ---
 
-### `rollout-restart-all.sh`
+### 2.3. `rollout-restart-all.sh`
 
 클러스터의 모든 네임스페이스를 순회하며 Deployment, StatefulSet, DaemonSet 리소스를 롤아웃 재시작합니다.
 
@@ -131,7 +135,7 @@ done
 
 ---
 
-### `setup-kubecontext.sh`
+### 2.4. `setup-kubecontext.sh`
 
 Vagrant로 생성된 클러스터의 kubeconfig를 로컬 머신에 설정합니다.
 
@@ -174,7 +178,9 @@ kubectl config use-context cilium-cluster
 kubectl config current-context
 ```
 
-## 권한 설정
+---
+
+## 3. 권한 설정
 
 스크립트 실행 전 실행 권한을 부여해야 합니다:
 
@@ -182,16 +188,18 @@ kubectl config current-context
 chmod +x *.sh
 ```
 
-## 트러블슈팅
+---
 
-### 스크립트 실행 권한 오류
+## 4. 트러블슈팅
+
+### 4.1. 스크립트 실행 권한 오류
 
 ```bash
 # Permission denied 오류 시
 chmod +x script-name.sh
 ```
 
-### kubectl 연결 실패
+### 4.2. kubectl 연결 실패
 
 ```bash
 # kubeconfig 확인
@@ -201,7 +209,7 @@ kubectl config view
 kubectl cluster-info
 ```
 
-### 커널 모듈 로드 실패
+### 4.3. 커널 모듈 로드 실패
 
 ```bash
 # 모듈 존재 여부 확인

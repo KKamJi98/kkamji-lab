@@ -4,9 +4,11 @@
 
 이 방식은 더 체계적이고 재현 가능하며, **Cilium CNI 사용에 최적화**되어 있습니다.
 
-## 주요 특징
+---
 
-### 선언적 클러스터 구성
+## 1. 주요 특징
+
+### 1.1. 선언적 클러스터 구성
 
 기존 명령줄 옵션 대신 YAML 설정 파일을 사용하여 클러스터를 구성합니다:
 
@@ -25,7 +27,7 @@ skipPhases:
   - addon/kube-proxy  # Cilium이 kube-proxy 역할 대체
 ```
 
-### kube-proxy 비활성화
+### 1.2. kube-proxy 비활성화
 
 `skipPhases: ["addon/kube-proxy"]` 설정을 통해 `kube-proxy`를 설치하지 않습니다. 이를 통해:
 
@@ -33,7 +35,9 @@ skipPhases:
 - iptables 규칙 충돌 방지
 - 더 나은 성능 및 관측성 확보
 
-## 디렉토리 구조
+---
+
+## 2. 디렉토리 구조
 
 ```
 vagrant-advanced/
@@ -46,7 +50,9 @@ vagrant-advanced/
 └── k8s-w.sh                 # Worker 조인 스크립트
 ```
 
-## 프로비저닝 흐름
+---
+
+## 3. 프로비저닝 흐름
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -77,9 +83,11 @@ vagrant-advanced/
 └───────────────────────┘     └───────────────────────────────────┘
 ```
 
-## 사용 방법
+---
 
-### 1. 클러스터 생성
+## 4. 사용 방법
+
+### 4.1. 클러스터 생성
 
 ```bash
 # 현재 디렉토리에서 실행
@@ -91,7 +99,7 @@ vagrant up
 # - cilium-w2: Worker 2 프로비저닝
 ```
 
-### 2. 클러스터 상태 확인
+### 4.2. 클러스터 상태 확인
 
 ```bash
 # Master 노드 접속
@@ -112,7 +120,7 @@ kubectl get ds -n kube-system kube-proxy
 kubectl get pods -n kube-system
 ```
 
-### 3. Cilium 설치
+### 4.3. Cilium 설치
 
 ```bash
 # Helm 리포지토리 추가
@@ -135,7 +143,7 @@ kubectl get nodes
 # cilium-w2   Ready    <none>          6m    v1.32.0
 ```
 
-### 4. 연결 테스트
+### 4.4. 연결 테스트
 
 ```bash
 # 테스트 Pod 배포
@@ -145,9 +153,11 @@ kubectl apply -f /vagrant/tests/
 kubectl exec -it curl-pod -- curl webpod
 ```
 
-## 설정 파일 상세
+---
 
-### init-configuration.yaml
+## 5. 설정 파일 상세
+
+### 5.1. init-configuration.yaml
 
 | 섹션 | 설명 |
 |------|------|
@@ -155,13 +165,15 @@ kubectl exec -it curl-pod -- curl webpod
 | `InitConfiguration` | 초기화 시 스킵할 단계 (kube-proxy) |
 | `KubeletConfiguration` | kubelet 런타임 설정 |
 
-### join-configuration.yaml
+### 5.2. join-configuration.yaml
 
 | 섹션 | 설명 |
 |------|------|
 | `JoinConfiguration` | 클러스터 참여 토큰, API 서버 주소 |
 
-## VM 리소스 요구사항
+---
+
+## 6. VM 리소스 요구사항
 
 | 노드 | CPU | Memory | Disk |
 |------|-----|--------|------|
@@ -170,9 +182,11 @@ kubectl exec -it curl-pod -- curl webpod
 | cilium-w2 | 2 cores | 2048 MB | 20 GB |
 | **총합** | **6 cores** | **6 GB** | **60 GB** |
 
-## 트러블슈팅
+---
 
-### 노드가 NotReady 상태로 유지되는 경우
+## 7. 트러블슈팅
+
+### 7.1. 노드가 NotReady 상태로 유지되는 경우
 
 CNI가 설치되지 않았거나 정상 동작하지 않을 수 있습니다:
 
@@ -184,7 +198,7 @@ kubectl get pods -n kube-system -l k8s-app=cilium
 kubectl logs -n kube-system -l k8s-app=cilium
 ```
 
-### kubeadm init 실패
+### 7.2. kubeadm init 실패
 
 ```bash
 # 로그 확인
@@ -195,7 +209,7 @@ sudo kubeadm reset -f
 sudo rm -rf /etc/cni/net.d/*
 ```
 
-### containerd 소켓 오류
+### 7.3. containerd 소켓 오류
 
 ```bash
 # containerd 상태 확인
@@ -205,7 +219,9 @@ sudo systemctl status containerd
 sudo systemctl restart containerd
 ```
 
-## 클린업
+---
+
+## 8. 클린업
 
 ```bash
 # 모든 VM 삭제

@@ -4,7 +4,9 @@
 
 이 방식은 Kubernetes 클러스터 구축의 **기본 원리를 이해**하는 데 적합합니다.
 
-## vagrant-advanced와의 차이점
+---
+
+## 1. vagrant-advanced와의 차이점
 
 | 항목 | vagrant-original | vagrant-advanced |
 |------|-----------------|------------------|
@@ -13,9 +15,11 @@
 | 권장 CNI | Flannel, Calico 등 | Cilium |
 | 설정 재현성 | 스크립트 의존 | 설정 파일 버전 관리 가능 |
 
-## 주요 특징
+---
 
-### 명령줄 인수 기반 구성
+## 2. 주요 특징
+
+### 2.1. 명령줄 인수 기반 구성
 
 별도의 YAML 설정 파일 없이 `kubeadm init` 및 `kubeadm join` 명령어에 필요한 옵션을 직접 명시합니다:
 
@@ -32,7 +36,7 @@ kubeadm join 192.168.10.100:6443 \
   --discovery-token-ca-cert-hash sha256:<hash>
 ```
 
-### kube-proxy 활성화
+### 2.2. kube-proxy 활성화
 
 이 환경에서는 `kube-proxy`가 기본적으로 설치됩니다:
 
@@ -40,7 +44,9 @@ kubeadm join 192.168.10.100:6443 \
 - 대부분의 CNI 플러그인과 호환
 - 전통적인 Kubernetes 네트워킹 학습에 적합
 
-## 디렉토리 구조
+---
+
+## 3. 디렉토리 구조
 
 ```
 vagrant-original/
@@ -50,7 +56,9 @@ vagrant-original/
 └── k8s-w.sh        # Worker 조인 스크립트
 ```
 
-## 프로비저닝 흐름
+---
+
+## 4. 프로비저닝 흐름
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -78,9 +86,11 @@ vagrant-original/
 └───────────────────────┘     └───────────────────────────────────┘
 ```
 
-## 사용 방법
+---
 
-### 1. 클러스터 생성
+## 5. 사용 방법
+
+### 5.1. 클러스터 생성
 
 ```bash
 # 현재 디렉토리에서 실행
@@ -89,7 +99,7 @@ vagrant up
 # 진행 상황 확인 (약 10-15분 소요)
 ```
 
-### 2. 클러스터 상태 확인
+### 5.2. 클러스터 상태 확인
 
 ```bash
 # Master 노드 접속
@@ -107,7 +117,7 @@ kubectl get ds -n kube-system kube-proxy
 kubectl get pods -n kube-system -l k8s-app=kube-proxy
 ```
 
-### 3. CNI 설치
+### 5.3. CNI 설치
 
 이 환경에서는 `kube-proxy`가 활성화되어 있으므로 대부분의 CNI를 사용할 수 있습니다:
 
@@ -129,7 +139,7 @@ helm install cilium cilium/cilium \
   --set kubeProxyReplacement=disabled
 ```
 
-### 4. 클러스터 검증
+### 5.4. 클러스터 검증
 
 ```bash
 # 노드 상태 확인 (Ready)
@@ -143,7 +153,9 @@ kubectl get nodes
 kubectl get pods -n kube-system
 ```
 
-## VM 리소스 요구사항
+---
+
+## 6. VM 리소스 요구사항
 
 | 노드 | CPU | Memory | Disk |
 |------|-----|--------|------|
@@ -152,9 +164,11 @@ kubectl get pods -n kube-system
 | cilium-w2 | 2 cores | 2048 MB | 20 GB |
 | **총합** | **6 cores** | **6 GB** | **60 GB** |
 
-## 트러블슈팅
+---
 
-### 노드가 NotReady 상태
+## 7. 트러블슈팅
+
+### 7.1. 노드가 NotReady 상태
 
 CNI 플러그인이 설치되지 않은 경우 발생합니다:
 
@@ -165,7 +179,7 @@ ls /etc/cni/net.d/
 # Flannel 또는 다른 CNI 설치 필요
 ```
 
-### kubeadm join 실패
+### 7.2. kubeadm join 실패
 
 토큰이 만료되었을 수 있습니다:
 
@@ -176,7 +190,7 @@ kubeadm token create --print-join-command
 # Worker에서 새 명령어로 재시도
 ```
 
-### 네트워크 문제
+### 7.3. 네트워크 문제
 
 ```bash
 # iptables 규칙 확인
@@ -186,7 +200,9 @@ sudo iptables -L -n
 kubectl logs -n kube-system -l k8s-app=kube-proxy
 ```
 
-## 클린업
+---
+
+## 8. 클린업
 
 ```bash
 # 모든 VM 삭제
@@ -196,7 +212,9 @@ vagrant destroy -f
 vagrant destroy cilium-w2 -f
 ```
 
-## 다음 단계
+---
+
+## 9. 다음 단계
 
 - Cilium의 고급 기능을 실습하려면 [`vagrant-advanced`](../vagrant-advanced/README.md) 환경 사용을 권장합니다.
 - 이 환경에서 Cilium을 사용하려면 `kubeProxyReplacement=disabled` 옵션으로 설치하세요.

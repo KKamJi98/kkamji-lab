@@ -2,11 +2,13 @@
 
 Cilium의 대안으로 Flannel CNI를 설치할 때 사용하는 설정과 가이드입니다.
 
-## Flannel이란?
+---
+
+## 1. Flannel이란?
 
 **Flannel**은 CoreOS에서 개발한 간단하고 가벼운 Kubernetes CNI 플러그인입니다. VXLAN, host-gw 등 다양한 백엔드를 지원하며, 설정이 간단하여 학습 및 테스트 환경에 적합합니다.
 
-### Cilium vs Flannel 비교
+### 1.1. Cilium vs Flannel 비교
 
 | 항목 | Cilium | Flannel |
 |------|--------|---------|
@@ -18,9 +20,11 @@ Cilium의 대안으로 Flannel CNI를 설치할 때 사용하는 설정과 가�
 | 리소스 사용량 | 중간 | 낮음 |
 | 권장 환경 | 프로덕션, 고급 기능 필요 시 | 개발/테스트, 간단한 네트워킹 |
 
-## 파일 설명
+---
 
-### `flannel-values.yaml`
+## 2. 파일 설명
+
+### 2.1. `flannel-values.yaml`
 
 Flannel Helm 차트 설치 시 사용하는 values 파일입니다.
 
@@ -46,16 +50,18 @@ flannel:
 | `flannel.iface` | 사용할 네트워크 인터페이스 | 자동 탐지 |
 | `flannel.backend` | 오버레이 네트워크 방식 | `vxlan` |
 
-## 설치 방법
+---
 
-### 1. Helm 리포지토리 추가
+## 3. 설치 방법
+
+### 3.1. Helm 리포지토리 추가
 
 ```bash
 helm repo add flannel https://flannel-io.github.io/flannel/
 helm repo update
 ```
 
-### 2. Flannel 설치
+### 3.2. Flannel 설치
 
 ```bash
 # 네임스페이스 생성 및 Flannel 설치
@@ -65,7 +71,7 @@ helm install flannel flannel/flannel \
   -f flannel-values.yaml
 ```
 
-### 3. 설치 확인
+### 3.3. 설치 확인
 
 ```bash
 # Flannel Pod 상태 확인
@@ -84,11 +90,13 @@ kubectl get ds -n kube-flannel
 kubectl get nodes
 ```
 
-## 백엔드 옵션
+---
+
+## 4. 백엔드 옵션
 
 Flannel은 여러 백엔드를 지원합니다:
 
-### VXLAN (기본값)
+### 4.1. VXLAN (기본값)
 
 모든 환경에서 동작하는 범용 오버레이 네트워크입니다.
 
@@ -103,7 +111,7 @@ flannel:
 - 약간의 오버헤드 발생
 - 클라우드/온프레미스 모두 호환
 
-### host-gw
+### 4.2. host-gw
 
 직접 라우팅 방식으로 더 나은 성능을 제공합니다.
 
@@ -118,7 +126,7 @@ flannel:
 - 오버헤드 최소화
 - Vagrant Host-Only 네트워크에 적합
 
-### WireGuard
+### 4.3. WireGuard
 
 암호화된 터널을 제공합니다.
 
@@ -133,9 +141,11 @@ flannel:
 - 커널 WireGuard 모듈 필요
 - 보안이 중요한 환경에 적합
 
-## Vagrant 환경에서의 주의사항
+---
 
-### 네트워크 인터페이스 설정
+## 5. Vagrant 환경에서의 주의사항
+
+### 5.1. 네트워크 인터페이스 설정
 
 Vagrant VM은 일반적으로 두 개의 네트워크 인터페이스를 가집니다:
 
@@ -151,7 +161,7 @@ flannel:
   iface: "eth1"  # 반드시 지정 필요
 ```
 
-### Pod CIDR 충돌 방지
+### 5.2. Pod CIDR 충돌 방지
 
 `kubeadm init` 시 사용한 Pod CIDR과 Flannel 설정이 일치해야 합니다:
 
@@ -163,9 +173,11 @@ kubeadm init --pod-network-cidr=10.244.0.0/16
 podCidr: "10.244.0.0/16"  # 동일해야 함
 ```
 
-## 트러블슈팅
+---
 
-### Flannel Pod가 CrashLoopBackOff
+## 6. 트러블슈팅
+
+### 6.1. Flannel Pod가 CrashLoopBackOff
 
 ```bash
 # 로그 확인
@@ -177,7 +189,7 @@ kubectl logs -n kube-flannel -l app=flannel
 # 3. 커널 모듈 누락
 ```
 
-### 노드 간 통신 실패
+### 6.2. 노드 간 통신 실패
 
 ```bash
 # flannel.1 인터페이스 확인
@@ -190,7 +202,7 @@ ip route | grep flannel
 ping <other-node-flannel-ip>
 ```
 
-### CNI 설정 파일 확인
+### 6.3. CNI 설정 파일 확인
 
 ```bash
 # CNI 설정 디렉토리 확인
@@ -200,7 +212,9 @@ ls -la /etc/cni/net.d/
 cat /etc/cni/net.d/10-flannel.conflist
 ```
 
-## 제거 방법
+---
+
+## 7. 제거 방법
 
 ```bash
 # Helm으로 제거
@@ -213,7 +227,9 @@ kubectl delete namespace kube-flannel
 sudo rm -f /etc/cni/net.d/10-flannel.conflist
 ```
 
-## 참고 자료
+---
+
+## 8. 참고 자료
 
 - [Flannel 공식 GitHub](https://github.com/flannel-io/flannel)
 - [Flannel 문서](https://github.com/flannel-io/flannel/blob/master/Documentation/kubernetes.md)
