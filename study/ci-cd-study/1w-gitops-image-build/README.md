@@ -2,18 +2,22 @@
 
 로컬 환경에 `kind`를 사용하여 Kubernetes 클러스터를 구축하고, `Docker`를 이용해 컨테이너 이미지를 빌드 및 실행하는 방법을 학습합니다.
 
-## 학습 목표
+---
+
+## 1. 학습 목표
 
 - Docker를 활용한 컨테이너 이미지 빌드 이해
 - kind를 사용한 로컬 Kubernetes 클러스터 구축
 - 다양한 언어(Python, Node.js)의 애플리케이션 컨테이너화
 - 이미지 레이어 구조 및 최적화 이해
 
-## 1. 개발 환경 구성
+---
+
+## 2. 개발 환경 구성
 
 실습을 위해 필요한 도구들을 설치합니다.
 
-### 필수 도구
+### 2.1. 필수 도구
 
 | 도구 | 용도 | 설치 (macOS) |
 |------|------|--------------|
@@ -22,7 +26,7 @@
 | kubectl | K8s CLI | `brew install kubernetes-cli` |
 | Helm | 패키지 관리자 | `brew install helm` |
 
-### kubectl 단축키 설정 (선택)
+### 2.2. kubectl 단축키 설정 (선택)
 
 ```bash
 # zsh 사용자
@@ -31,7 +35,7 @@ echo "complete -F __start_kubectl k" >> ~/.zshrc
 source ~/.zshrc
 ```
 
-### 권장 도구
+### 2.3. 권장 도구
 
 | 도구 | 용도 | 설치 |
 |------|------|------|
@@ -52,9 +56,11 @@ echo "compdef kubecolor=kubectl" >> ~/.zshrc
 export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
 ```
 
-## 2. kind를 이용한 로컬 클러스터 생성
+---
 
-### kind란?
+## 3. kind를 이용한 로컬 클러스터 생성
+
+### 3.1. kind란?
 
 **kind**(Kubernetes IN Docker)는 Docker 컨테이너를 노드로 사용하여 로컬에서 Kubernetes 클러스터를 실행하는 도구입니다.
 
@@ -64,7 +70,7 @@ export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
 - 로컬 개발 및 테스트에 적합
 - CI/CD 파이프라인 통합 용이
 
-### 클러스터 생성
+### 3.2. 클러스터 생성
 
 ```bash
 # 기본 클러스터 생성
@@ -86,7 +92,7 @@ nodes:
 EOF
 ```
 
-### 클러스터 확인
+### 3.3. 클러스터 확인
 
 ```bash
 # 노드 목록 확인
@@ -102,7 +108,7 @@ kubectl cluster-info
 kubectl config view --minify
 ```
 
-### kind 관리 명령어
+### 3.4. kind 관리 명령어
 
 ```bash
 # 클러스터 목록
@@ -115,9 +121,11 @@ kind delete cluster --name myk8s
 kind export kubeconfig --name myk8s
 ```
 
-## 3. Docker를 사용한 컨테이너 이미지 빌드
+---
 
-### Dockerfile 구조
+## 4. Docker를 사용한 컨테이너 이미지 빌드
+
+### 4.1. Dockerfile 구조
 
 ```dockerfile
 # 베이스 이미지 지정
@@ -140,7 +148,7 @@ EXPOSE 8080
 CMD ["python", "app.py"]
 ```
 
-### 빌드 과정
+### 4.2. 빌드 과정
 
 ```bash
 # 실습 디렉토리로 이동
@@ -157,7 +165,7 @@ docker build -f Dockerfile -t $MYREGISTRY/$MYUSER/pythonapp:latest .
 docker images | grep pythonapp
 ```
 
-### 이미지 레이어 확인
+### 4.3. 이미지 레이어 확인
 
 Docker 이미지는 여러 레이어로 구성됩니다:
 
@@ -188,9 +196,11 @@ docker inspect $MYREGISTRY/$MYUSER/pythonapp:latest | jq '.[0].RootFS.Layers'
 └─────────────────────────────────────┘
 ```
 
-## 4. 컨테이너 실행 및 배포
+---
 
-### 로컬에서 컨테이너 실행
+## 5. 컨테이너 실행 및 배포
+
+### 5.1. 로컬에서 컨테이너 실행
 
 ```bash
 # Docker Hub 로그인
@@ -213,7 +223,7 @@ docker logs myweb
 docker exec -it myweb /bin/bash
 ```
 
-### 정리
+### 5.2. 정리
 
 ```bash
 # 컨테이너 중지 및 삭제
@@ -223,9 +233,11 @@ docker rm -f myweb
 docker rmi $MYREGISTRY/$MYUSER/pythonapp:latest
 ```
 
-## 5. Kubernetes에 배포
+---
 
-### 매니페스트 작성
+## 6. Kubernetes에 배포
+
+### 6.1. 매니페스트 작성
 
 ```yaml
 # deployment.yaml
@@ -263,7 +275,7 @@ spec:
     nodePort: 30000
 ```
 
-### 배포 및 확인
+### 6.2. 배포 및 확인
 
 ```bash
 # 배포
@@ -279,9 +291,11 @@ kubectl get svc pythonapp
 curl http://localhost:30000
 ```
 
-## 6. 이미지 최적화 팁
+---
 
-### 멀티 스테이지 빌드
+## 7. 이미지 최적화 팁
+
+### 7.1. 멀티 스테이지 빌드
 
 ```dockerfile
 # 빌드 스테이지
@@ -299,7 +313,7 @@ ENV PATH=/root/.local/bin:$PATH
 CMD ["python", "app.py"]
 ```
 
-### 레이어 캐시 활용
+### 7.2. 레이어 캐시 활용
 
 ```dockerfile
 # 나쁜 예 - 코드 변경 시 모든 레이어 재빌드
@@ -312,7 +326,7 @@ RUN pip install -r requirements.txt
 COPY . .
 ```
 
-### .dockerignore 활용
+### 7.3. .dockerignore 활용
 
 ```
 # .dockerignore
@@ -325,13 +339,17 @@ __pycache__
 node_modules
 ```
 
-## 실습 자료
+---
+
+## 8. 실습 자료
 
 - [`chapters/ch03/python-app/`](./chapters/ch03/python-app/) - Python 샘플 앱
 - [`chapters/ch03/nodejs-app/`](./chapters/ch03/nodejs-app/) - Node.js 샘플 앱
 - [`practice.md`](./practice.md) - 상세 실습 명령어 모음
 
-## 참고 자료
+---
+
+## 9. 참고 자료
 
 - [Docker 공식 문서](https://docs.docker.com/)
 - [kind 공식 문서](https://kind.sigs.k8s.io/)

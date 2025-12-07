@@ -2,16 +2,20 @@
 
 `CloudNet@` 커뮤니티 CI/CD 스터디 6주차 ArgoCD 심화 학습 자료입니다.
 
-## 학습 목표
+---
+
+## 1. 학습 목표
 
 - ArgoCD 고급 기능 활용
 - ApplicationSet을 통한 멀티 환경 배포
 - Argo Rollouts를 활용한 Progressive Delivery
 - 실무 적용 가능한 GitOps 파이프라인 구성
 
-## 주요 학습 내용
+---
 
-### 1. ApplicationSet
+## 2. 주요 학습 내용
+
+### 2.1. ApplicationSet
 
 여러 Application을 자동으로 생성하고 관리합니다.
 
@@ -67,7 +71,7 @@ spec:
           selfHeal: true
 ```
 
-### 2. Sync Waves와 Hooks
+### 2.2. Sync Waves와 Hooks
 
 배포 순서를 제어하고 전/후 작업을 수행합니다.
 
@@ -116,7 +120,7 @@ spec:
 | `SyncFail` | 동기화 실패 시 |
 | `Skip` | 동기화에서 제외 |
 
-### 3. Argo Rollouts 연동
+### 2.3. Argo Rollouts 연동
 
 Progressive Delivery를 위한 고급 배포 전략입니다.
 
@@ -178,7 +182,7 @@ spec:
         image: myapp:v2
 ```
 
-### 4. 멀티 클러스터 배포
+### 2.4. 멀티 클러스터 배포
 
 **클러스터 등록:**
 
@@ -218,7 +222,7 @@ spec:
         namespace: myapp
 ```
 
-### 5. 보안 및 RBAC
+### 2.5. 보안 및 RBAC
 
 **Project 기반 권한 분리:**
 
@@ -259,9 +263,11 @@ data:
     g, team-a-group, role:team-a
 ```
 
-## 실습 환경 구성
+---
 
-### Argo Rollouts 설치
+## 3. 실습 환경 구성
+
+### 3.1. Argo Rollouts 설치
 
 ```bash
 # Argo Rollouts 설치
@@ -275,7 +281,7 @@ brew install argoproj/tap/kubectl-argo-rollouts
 kubectl argo rollouts list rollouts
 ```
 
-### 대시보드 접근
+### 3.2. 대시보드 접근
 
 ```bash
 # ArgoCD UI
@@ -286,9 +292,11 @@ kubectl argo rollouts dashboard &
 # http://localhost:3100 접속
 ```
 
-## 베스트 프랙티스
+---
 
-### 저장소 구조
+## 4. 베스트 프랙티스
+
+### 4.1. 저장소 구조
 
 ```
 gitops-repo/
@@ -304,13 +312,13 @@ gitops-repo/
 └── applicationsets/         # ApplicationSet 정의
 ```
 
-### 네이밍 컨벤션
+### 4.2. 네이밍 컨벤션
 
 - Application: `{app-name}-{environment}`
 - Namespace: `{app-name}-{environment}`
 - Project: `{team-name}`
 
-### 동기화 정책
+### 4.3. 동기화 정책
 
 | 환경 | 자동 동기화 | Prune | SelfHeal |
 |------|-----------|-------|----------|
@@ -318,7 +326,9 @@ gitops-repo/
 | Staging | O | O | X |
 | Prod | X | X | X |
 
-## 참고 자료
+---
+
+## 5. 참고 자료
 
 - [ArgoCD ApplicationSet](https://argo-cd.readthedocs.io/en/stable/user-guide/application-set/)
 - [Argo Rollouts](https://argoproj.github.io/argo-rollouts/)

@@ -2,7 +2,9 @@
 
 **"Argo CD in Practice"** (Packt Publishing) 도서의 예제 코드 및 실습 자료입니다.
 
-## 도서 소개
+---
+
+## 1. 도서 소개
 
 <img src="https://static.packt-cdn.com/products/9781803233321/cover/smaller" alt="Argo CD in Practice" height="200px" align="right">
 
@@ -24,7 +26,9 @@ GitOps 방식으로 클라우드 네이티브 애플리케이션을 관리하는
 - Kubernetes 환경에서 작업하는 DevOps 엔지니어
 - GitOps 도입을 고려하는 SRE
 
-## 디렉토리 구조
+---
+
+## 2. 디렉토리 구조
 
 ```
 ArgoCD-in-Practice/
@@ -39,15 +43,17 @@ ArgoCD-in-Practice/
 └── ch09/    # 9장: 고급 기능
 ```
 
-## 주요 학습 내용
+---
 
-### 1장: GitOps 소개
+## 3. 주요 학습 내용
+
+### 3.1. 1장: GitOps 소개
 
 - GitOps 핵심 원칙
 - 기존 CI/CD와의 차이점
 - Pull vs Push 모델
 
-### 2장: ArgoCD 시작하기
+### 3.2. 2장: ArgoCD 시작하기
 
 ArgoCD 설치 및 첫 번째 Application 배포:
 
@@ -67,7 +73,7 @@ argocd app create guestbook \
   --dest-namespace default
 ```
 
-### 3장: Application 관리
+### 3.3. 3장: Application 관리
 
 Application CRD 상세 구조:
 
@@ -97,7 +103,7 @@ spec:
     - CreateNamespace=true
 ```
 
-### 4장: 동기화 전략
+### 3.4. 4장: 동기화 전략
 
 **Sync Waves**: 리소스 배포 순서 제어
 
@@ -116,7 +122,7 @@ metadata:
     argocd.argoproj.io/hook-delete-policy: HookSucceeded
 ```
 
-### 5장: RBAC 및 보안
+### 3.5. 5장: RBAC 및 보안
 
 ArgoCD 계정 관리:
 
@@ -130,13 +136,13 @@ data:
   accounts.developer: apiKey, login
 ```
 
-### 6장: 프로덕션 운영
+### 3.6. 6장: 프로덕션 운영
 
 - HA(High Availability) 구성
 - 모니터링 및 알림
 - 백업 및 복구
 
-### 7장: 트러블슈팅
+### 3.7. 7장: 트러블슈팅
 
 일반적인 문제 해결:
 
@@ -154,7 +160,7 @@ argocd app sync myapp --force --prune
 argocd app diff myapp
 ```
 
-### 8장: 멀티 클러스터
+### 3.8. 8장: 멀티 클러스터
 
 ```bash
 # 외부 클러스터 등록
@@ -164,7 +170,7 @@ argocd cluster add <context-name>
 argocd cluster list
 ```
 
-### 9장: 고급 기능
+### 3.9. 9장: 고급 기능
 
 **ApplicationSet**: 여러 Application 자동 생성
 
@@ -190,9 +196,11 @@ spec:
         path: '{{cluster}}'
 ```
 
-## 실습 환경
+---
 
-### 요구사항
+## 4. 실습 환경
+
+### 4.1. 요구사항
 
 | 소프트웨어 | 버전 | 비고 |
 |-----------|------|------|
@@ -201,7 +209,7 @@ spec:
 | kubectl | 1.20+ | |
 | argocd CLI | 최신 | |
 
-### 환경 구성
+### 4.2. 환경 구성
 
 ```bash
 # kind 클러스터 생성
@@ -218,14 +226,18 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.pas
 kubectl port-forward svc/argocd-server -n argocd 8080:443
 ```
 
-## 관련 자료
+---
+
+## 5. 관련 자료
 
 - [Argo CD in Practice - Packt](https://www.packtpub.com/product/argo-cd-in-practice/9781803233321)
 - [무료 eBook 다운로드](https://packt.link/free-ebook/9781803233321) (구매자 대상)
 - [ArgoCD 공식 문서](https://argo-cd.readthedocs.io/)
 - [ArgoCD GitHub](https://github.com/argoproj/argo-cd)
 
-## 저자
+---
+
+## 6. 저자
 
 - **Spiros Economakis** - SRE, GitOps 전문가
 - **Liviu Costea** - DevOps 엔지니어, CNCF Ambassador
