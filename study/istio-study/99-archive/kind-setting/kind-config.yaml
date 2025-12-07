@@ -1,0 +1,31 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  apiServerAddress: "0.0.0.0"
+  apiServerPort: 36443           # 항상 호스트 36443으로 고정
+nodes:
+# 1. Master Node (Control Plane)
+- role: control-plane
+  image: kindest/node:v1.33.4
+  labels:
+    ingress-ready: true
+  extraPortMappings:
+  - containerPort: 30000
+    hostPort: 30000
+    protocol: TCP
+  - containerPort: 30001
+    hostPort: 30001
+    protocol: TCP
+  - containerPort: 30002
+    hostPort: 30002
+    protocol: TCP
+  - containerPort: 30003
+    hostPort: 30003
+    protocol: TCP
+# 2. Worker Node 1
+- role: worker
+  image: kindest/node:v1.33.4
+
+# 3. Worker Node 2
+- role: worker
+  image: kindest/node:v1.33.4
