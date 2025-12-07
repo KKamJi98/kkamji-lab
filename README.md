@@ -2,11 +2,15 @@
 
 클라우드 네이티브 기술 학습 및 실습 자료를 모아둔 개인 저장소입니다.
 
-## 개요
+---
 
-이 저장소는 `CloudNet@` 커뮤니티의 Gasida님이 진행하시는 스터디를 기반으로 한 학습 자료와 실습 코드를 포함하고 있습니다. Kubernetes, CNI(Container Network Interface), CI/CD 파이프라인 등 클라우드 네이티브 생태계의 핵심 기술들을 다룹니다.
+## 1. 개요
 
-## 저장소 구조
+이 저장소는 클라우드 네이티브 기술을 학습하고 실습한 내용을 정리한 개인 저장소입니다. Kubernetes, CNI(Container Network Interface), CI/CD 파이프라인 등 클라우드 네이티브 생태계의 핵심 기술들을 다룹니다.
+
+---
+
+## 2. 저장소 구조
 
 ```
 .
@@ -22,9 +26,11 @@
 └── README.md
 ```
 
-## 스터디 목록
+---
 
-### Cilium Study - Season 1
+## 3. 스터디 목록
+
+### 3.1. Cilium Study - Season 1
 
 eBPF 기반의 고성능 네트워킹, 관측성(Observability), 보안 솔루션인 **Cilium**을 심층적으로 학습하는 스터디입니다.
 
@@ -43,7 +49,7 @@ eBPF 기반의 고성능 네트워킹, 관측성(Observability), 보안 솔루�
 
 자세한 내용은 [Cilium Study README](./study/cilium-study/README.md)를 참고하세요.
 
-### CI/CD Study - Season 1 (ArgoCD)
+### 3.2. CI/CD Study - Season 1 (ArgoCD)
 
 GitOps 원칙을 기반으로 한 CI/CD 파이프라인 구축을 학습하는 스터디입니다. **ArgoCD**를 중심으로 선언적 배포 관리를 실습합니다.
 
@@ -61,7 +67,9 @@ GitOps 원칙을 기반으로 한 CI/CD 파이프라인 구축을 학습하는 �
 
 자세한 내용은 [CI/CD Study README](./study/ci-cd-study/README.md)를 참고하세요.
 
-## 사전 요구사항
+---
+
+## 4. 사전 요구사항
 
 실습을 진행하기 위해 다음 도구들이 필요합니다:
 
@@ -74,9 +82,11 @@ GitOps 원칙을 기반으로 한 CI/CD 파이프라인 구축을 학습하는 �
 | Helm | 패키지 관리자 | `brew install helm` |
 | kind | 로컬 K8s 클러스터 | `brew install kind` |
 
-## 빠른 시작
+---
 
-### Cilium 실습 환경 구축
+## 5. 빠른 시작
+
+### 5.1. Cilium 실습 환경 구축
 
 ```bash
 # 저장소 클론
@@ -96,7 +106,7 @@ vagrant ssh cilium-m1
 kubectl get nodes
 ```
 
-### kind를 활용한 로컬 클러스터 구축
+### 5.2. kind를 활용한 로컬 클러스터 구축
 
 ```bash
 # kind 클러스터 생성
@@ -106,17 +116,30 @@ kind create cluster --name myk8s --image kindest/node:v1.32.8
 kubectl get nodes -o wide
 ```
 
-## 참고 자료
+---
+
+## 6. 참고 자료
 
 - [Cilium 공식 문서](https://docs.cilium.io/)
 - [ArgoCD 공식 문서](https://argo-cd.readthedocs.io/)
 - [Kubernetes 공식 문서](https://kubernetes.io/docs/)
-- [CloudNet@ 커뮤니티](https://www.notion.so/CloudNet-Blog-c9dfa44a27ff431dafdd2edacc8a1863)
 
-## 감사의 말
+---
 
-`CloudNet@` 커뮤니티의 **Gasida**님께 유익한 스터디를 진행해주셔서 감사드립니다.
+## 7. Markdown 도구 실행 방법
 
-## 라이선스
+저장소 내 마크다운 헤더 규칙 수정 및 번호 재정렬을 자동화할 수 있습니다.
+
+```bash
+# 저장소 루트에서 실행
+./scripts/run_md_tools.sh --root .
+```
+
+- Python 3이 필요하며, `PYTHON_BIN` 환경변수로 다른 파이썬 실행 파일을 지정할 수 있습니다.
+- `--root` 인자로 처리할 디렉터리를 지정합니다. 생략 시 기본값은 현재 디렉터리입니다.
+
+---
+
+## 8. 라이선스
 
 이 저장소의 실습 자료는 학습 목적으로 자유롭게 활용할 수 있습니다.
