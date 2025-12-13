@@ -1,0 +1,26 @@
+jenkins:
+  enabled: true
+  name: jenkins
+  namespace: jenkins
+  image: jenkins/jenkins:2.528.3-lts
+
+  basePlugins:
+  - name: kubernetes
+    version: 4392.v19cea_fdb_5913
+  - name: workflow-job
+    version: 1546.v62a_c59c112dd
+  - name: workflow-aggregator
+    version: 608.v67378e9d3db_1
+  - name: git
+    version: 5.7.0
+  - name: job-dsl
+    version: "1.93"
+  - name: configuration-as-code
+    version: "1985.vdda_32d0c4ea_b_"
+  - name: kubernetes-credentials-provider
+    version: 1.299.v610fa_e76761a_
+
+  service:
+    type: NodePort
+    port: 8080
+    nodePort: 30003

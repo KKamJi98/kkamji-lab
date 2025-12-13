@@ -1,0 +1,5 @@
+# Codex run history (do not commit)
+LAST_CODEX_RUN.md
+
+# Sensitive artifacts (do not commit)
+cluster-keys.json
