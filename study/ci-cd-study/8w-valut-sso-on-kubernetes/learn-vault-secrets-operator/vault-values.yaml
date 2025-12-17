@@ -1,0 +1,25 @@
+server:
+  image:
+    repository: "hashicorp/vault"
+    tag: "1.19.0"
+
+  dev:
+    enabled: true
+    devRootToken: "root"
+
+  logLevel: debug
+
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 8200
+    targetPort: 8200
+
+ui:
+  enabled: true
+  serviceType: "NodePort"
+  externalPort: 8200
+  serviceNodePort: 30005
+
+injector:
+  enabled: "false"
