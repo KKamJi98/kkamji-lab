@@ -4,14 +4,18 @@
 
 Kubernetes native operator which fully manages Jenkins on Kubernetes
 
-## Requirements
+---
+
+## 1. Requirements
 
 | Repository | Name | Version |
 |------------|------|---------|
 |  | cert-manager-crds | 1.14.2 |
 | https://charts.jetstack.io | cert-manager | 1.14.2 |
 
-## Values
+---
+
+## 2. Values
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|

@@ -335,12 +335,12 @@ kubectl edit svc bookinfo-gateway-istio -n default
 ```shell
 kubectl get nodes -o wide
 # NAME                   STATUS   ROLES                  AGE   VERSION        INTERNAL-IP    EXTERNAL-IP    OS-IMAGE             KERNEL-VERSION   CONTAINER-RUNTIME
-# lima-rancher-desktop   Ready    control-plane,master   47m   v1.33.6+k3s1   192.168.5.15   192.168.64.2   Alpine Linux v3.22   6.6.116-0-virt   docker://28.3.3
+# lima-rancher-desktop   Ready    control-plane,master   47m   v1.33.6+k3s1   192.168.5.15   192.168.205.2   Alpine Linux v3.22   6.6.116-0-virt   docker://28.3.3
 # Istio API
-open http://192.168.64.2:30010/productpage
+open http://192.168.205.2:30010/productpage
 
 # Gateway API
-open http://192.168.64.2:30020/productpage
+open http://192.168.205.2:30020/productpage
 ```
 
 ![Book Info Web](img/04_book_info_web.png)
@@ -371,8 +371,8 @@ helm upgrade -i monitoring -n monitoring prometheus-community/kube-prometheus-st
 ##############################################################
 # 접속 확인
 ##############################################################
-open http://192.168.64.2:30000
-open http://192.168.64.2:30001
+open http://192.168.205.2:30000
+open http://192.168.205.2:30001
 ```
 
 ### 7.2. Kiali 설치
@@ -401,7 +401,7 @@ kubectl apply -f monitor/podmonitor.yaml
 ### 7.4. Prometheus에서 Istio Metrics 확인
 
 ```shell
-open http://192.168.64.2:30001/targets
+open http://192.168.205.2:30001/targets
 ```
 
 ![Prometheus Targets](img/05_prometheus-targets.png)
@@ -417,7 +417,7 @@ for i in {1..100}; do
 
   echo "[$i] Request -> Port: $PORT"
   curl -s -o /dev/null -w "%{http_code}\n" \
-       "http://192.168.64.2:$PORT/productpage"
+       "http://192.168.205.2:$PORT/productpage"
 
   sleep 0.1
 done
@@ -425,7 +425,7 @@ done
 ##############################################################
 # Kiali 접속
 ##############################################################
-open http://192.168.64.2:30002
+open http://192.168.205.2:30002
 ```
 
 ![Kiali Dashboard](img/06_kiali_dashboard.png)
