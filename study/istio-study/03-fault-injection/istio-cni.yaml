@@ -1,0 +1,25 @@
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  components:
+    cni:
+      namespace: istio-system
+      enabled: true
+    pilot:
+      k8s:
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+  meshConfig:
+    accessLogFile: /dev/stdout
+    accessLogEncoding: JSON
+    accessLogFormat: |
+      {
+        "duration": "%DURATION%",
+        "req_method": "%REQ(:METHOD)%",
+        "req_path": "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%",
+        "res_code": "%RESPONSE_CODE%",
+        "upstream_info": "%UPSTREAM_CLUSTER_RAW%",
+        "req_headers_end-user": "%REQ(end-user)%"
+      }

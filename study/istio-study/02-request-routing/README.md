@@ -1,4 +1,4 @@
-# Request Routing
+# Request Routing In Istio
 
 > **참고 자료**: [KubeOPS - [아는 만큼 힘이 되는 트래픽 관리]](https://cafe.naver.com/kubeops/822)
 
