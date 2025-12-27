@@ -9,6 +9,8 @@ Istio의 장애 주입(Fault Injection) 기능을 사용하면 네트워크 지�
 - [Istio Docs - Istio Fault Injection](https://istio.io/latest/docs/tasks/traffic-management/fault-injection/)
 - [Istio Docs - HTTPFaultInjection](https://istio.io/latest/docs/reference/config/networking/virtual-service/#HTTPFaultInjection)
 
+> **참고 자료**: [KubeOPS - [아는 만큼 힘이 되는 트래픽 관리] Fault Injection](https://cafe.naver.com/kubeops/823)
+
 ---
 
 ## 1. 사전 세팅 리소스 (Request Routing 실습 내용 포함)
@@ -223,10 +225,181 @@ kubectl get cm istio -n istio-system -o yaml | kubectl neat
 # 대시보드 트래픽 발생 (admin 사용자 로그인)
 open http://192.168.205.2:30010/productpage
 
+# 로그 확인  (res_code 0 및 duration 필드 확인)
 kubectl logs -n default --tail 10 deploy/productpage-v1 -c istio-proxy
+# {"duration":6,"req_headers_end-user":null,"req_method":"POST","req_path":"/login","res_code":302,"upstream_info":"inbound|9080||"}
+# {"duration":4,"req_headers_end-user":"admin","req_method":"GET","req_path":"/details/0","res_code":200,"upstream_info":"outbound|9080||details.default.svc.cluster.local"}
+# {"duration":3001,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"outbound|9080||reviews-v2.default.svc.cluster.local"}
+# {"duration":3002,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"outbound|9080||reviews-v2.default.svc.cluster.local"}
+# {"duration":3001,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"outbound|9080||reviews-v2.default.svc.cluster.local"}
+# {"duration":3001,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"outbound|9080||reviews-v2.default.svc.cluster.local"}
+# {"duration":6017,"req_headers_end-user":null,"req_method":"GET","req_path":"/productpage","res_code":200,"upstream_info":"inbound|9080||"}
+# {"duration":2,"req_headers_end-user":null,"req_method":"GET","req_path":"/static/tailwind/tailwind.css","res_code":304,"upstream_info":"inbound|9080||"}
+# {"duration":1,"req_headers_end-user":"admin","req_method":"GET","req_path":"/details/0","res_code":200,"upstream_info":"outbound|9080||details.default.svc.cluster.local"}
+# {"duration":8,"req_headers_end-user":null,"req_method":"GET","req_path":"/static/img/izzy.png","res_code":304,"upstream_info":"inbound|9080||"}
+kubectl logs -n default --tail 10 deploy/reviews-v2 -c istio-proxy
+# {"duration":2999,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"inbound|9080||"}
+# {"duration":4005,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":200,"upstream_info":"outbound|9080|v1|ratings.default.svc.cluster.local"}
+# {"duration":3001,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"inbound|9080||"}
+# {"duration":4003,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":200,"upstream_info":"outbound|9080|v1|ratings.default.svc.cluster.local"}
+# {"duration":3000,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"inbound|9080||"}
+# {"duration":4000,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":200,"upstream_info":"outbound|9080|v1|ratings.default.svc.cluster.local"}
+# {"duration":3001,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"inbound|9080||"}
+# {"duration":3996,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":200,"upstream_info":"outbound|9080|v1|ratings.default.svc.cluster.local"}
+# {"duration":3002,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"inbound|9080||"}
+# {"duration":3997,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":200,"upstream_info":"outbound|9080|v1|ratings.default.svc.cluster.local"}
 ```
+
+![Envoy Duration](img/02_envoy_duration_log.png)
 
 ### 4.3. Kiali 대시보드 확인
 ```
 istioctl dashboard kiali
+```
+
+![Kiali Error Tracing](img/03_kiali_error_tracing.png)
+
+## 5. Istio 테스트 - Fault Injection 리소스 설정 (Delay: 4s -> 2s)
+
+![Delay Config Change](img/04_delay_config_change.png)
+
+```shell
+# Istio API - VirtualService 수정 (fixed delay 4s -> 2s)
+kubectl edit virtualservice ratings-delay
+
+# 대시보드 재접속 후 DevTools로 지연시간 확인 (지연 시간 2초로 변경 확인)
+open http://192.168.205.2:30010/productpage
+```
+
+![Delay 2s Check](img/05_delay_2s_check.png)
+
+### Sidecar (Productpage, Reviews, Ratings) 로그 확인
+
+```shell
+kubectl logs -n default --tail 10 deploy/productpage-v1 -c istio-proxy
+# {"duration":2024,"req_headers_end-user":null,"req_method":"GET","req_path":"/productpage","res_code":200,"upstream_info":"inbound|9080||"}
+# {"duration":2013,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":200,"upstream_info":"outbound|9080|v2|reviews.default.svc.cluster.local"}
+
+kubectl logs -n default --tail 10 deploy/reviews-v2 -c istio-proxy # 2초
+# {"duration":2011,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":200,"upstream_info":"inbound|9080||"}
+# {"duration":2008,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":200,"upstream_info":"outbound|9080|v1|ratings.default.svc.cluster.local"}
+
+kubectl logs -n default --tail 10 deploy/ratings-v1 -c istio-proxy
+# {"duration":4,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":200,"upstream_info":"inbound|9080||"}
+```
+
+![Delay 2s Logs](img/06_delay_2s_logs.png)
+
+## 5. Istio 테스트 - Fault Injection 리소스 설정 (Delay: 2s -> 11s)
+
+```shell
+# Istio API - VirtualService 수정 (fixed delay 2s -> 11s)
+kubectl edit virtualservice ratings-delay
+
+# 대시보드 재접속 후 DevTools로 지연시간 확인 (지연 시간 -> 6초)
+open http://192.168.205.2:30010/productpage
+```
+
+### Sidecar (Productpage, Reviews, Ratings) 로그 확인
+
+```shell
+kubectl logs -n default --tail 10 deploy/productpage-v1 -c istio-proxy
+# {"duration":6026,"req_headers_end-user":null,"req_method":"GET","req_path":"/productpage","res_code":200,"upstream_info":"inbound|9080||"}
+# {"duration":3008,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"outbound|9080|v2|reviews.default.svc.cluster.local"}
+# // Retry
+# {"duration":3001,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"outbound|9080|v2|reviews.default.svc.cluster.local"}
+
+kubectl logs -n default --tail 10 deploy/reviews-v2 -c istio-proxy
+# {"duration":3006,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"inbound|9080||"}
+# {"duration":10002,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":0,"upstream_info":"outbound|9080|v1|ratings.default.svc.cluster.local"}
+# // Retry
+# {"duration":2999,"req_headers_end-user":"admin","req_method":"GET","req_path":"/reviews/0","res_code":0,"upstream_info":"inbound|9080||"}
+# {"duration":10002,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":0,"upstream_info":"outbound|9080|v1|ratings.default.svc.cluster.local"}
+
+kubectl logs -n default --tail 10 deploy/ratings-v1 -c istio-proxy
+# {"duration":1,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":200,"upstream_info":"inbound|9080||"}
+# // Retry
+# {"duration":1,"req_headers_end-user":"admin","req_method":"GET","req_path":"/ratings/0","res_code":200,"upstream_info":"inbound|9080||"}
+```
+
+![Delay 11s Retry Logs](img/07_delay_11s_retry_logs.png)
+
+## 6. App timeout 확인
+
+![App Timeout Code](img/08_app_timeout_code.png)
+
+- Productpage (Python) : https://github.com/istio/istio/blob/master/samples/bookinfo/src/productpage/productpage.py
+  - `res = send_request(url, headers=headers, timeout=3.0)`
+- Review (Java) : https://github.com/istio/istio/blob/master/samples/bookinfo/src/reviews/reviews-application/src/main/java/application/rest/LibertyRestEndpoint.java
+  - `timeout=star_color.equals("black") ? 10000 : 2500`
+- Ratings (Node) : https://github.com/istio/istio/blob/master/samples/bookinfo/src/ratings/ratings.js
+  - `setTimeout(getLocalReviewsSuccessful, 7000, res, productId)`
+
+## Kiali 대시보드 확인
+
+```shell
+istioctl dashboard kiali
+```
+
+![Kiali Traffic Graph](img/09_kiali_traffic_graph.png)
+
+## 7. Abort 테스트
+
+```shell
+# Virtualservice - Delay 삭제
+kubectl delete virtualservice -n default ratings-delay
+
+# Virtualservice - Abort 생성
+kubectl apply -f https://raw.githubusercontent.com/k8s-1pro/kubernetes-anotherclass-sprint5/refs/heads/main/542-fault-injection/5421/istio-api/virtual-service-ratings-abort.yaml
+
+# Abort 내용 확인
+kubectl get virtualservice -n default ratings-abort -o yaml | kubectl neat
+```
+
+아래 VirtualService는 `admin` 사용자가 ratings 서비스에 요청할 때 100% 확률로 HTTP 500 에러를 반환하도록 설정합니다. `fault.abort` 필드를 통해 실제 서비스 장애 없이 에러 응답을 시뮬레이션할 수 있으며, 이를 통해 애플리케이션의 에러 핸들링 로직을 검증할 수 있습니다.
+
+```yaml
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: ratings-abort
+  namespace: default
+spec:
+  hosts:
+  - ratings
+  http:
+  - fault:
+      abort:
+        httpStatus: 500
+        percentage:
+          value: 100
+    match:
+    - headers:
+        end-user:
+          exact: admin
+    route:
+    - destination:
+        host: ratings
+        subset: v1
+  - route:
+    - destination:
+        host: ratings
+        subset: v1
+```
+
+### 대시보드 접속 및 Kiali 확인
+
+```shell
+# admin으로 로그인 (비밀번호는 아무거나)
+open http://192.168.205.2:30010/productpage
+```
+
+![Ratings Abort Error](img/10_ratings_abort_error.png)
+
+## 리소스 정리
+
+```shell
+# Istio API - Virtualservice , DestinationRule 삭제
+kubectl delete virtualservice -n default ratings-abort reviews
+kubectl delete destinationrule -n default ratings reviews
 ```
