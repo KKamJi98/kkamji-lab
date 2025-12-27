@@ -21,7 +21,7 @@ def list_kubeconfig_files() -> list[Path]:
     """
     List all kubeconfig files in ~/.kube directory.
 
-    Returns files matching pattern: config, config_*, config-*
+    Returns files containing "config" in the filename (excluding backups).
     """
     kube_dir = get_kube_dir()
     if not kube_dir.exists():
@@ -34,8 +34,8 @@ def list_kubeconfig_files() -> list[Path]:
         if not item.is_file():
             continue
         name = item.name
-        # Match: config, config_*, config-*, config.*
-        if name == "config" or name.startswith(("config_", "config-", "config.")):
+        # Match: any filename containing "config"
+        if "config" in name:
             # Exclude backup files
             if not any(name.endswith(ext) for ext in [".bak", ".backup", ".old", ".tmp"]):
                 configs.append(item)
@@ -164,9 +164,7 @@ def get_user_selection(configs: list[Path]) -> Optional[list[Path]]:
                     invalid_selections.append(part)
 
             if invalid_selections:
-                console.print(
-                    f"[red]Invalid selection(s): {', '.join(invalid_selections)}[/red]"
-                )
+                console.print(f"[red]Invalid selection(s): {', '.join(invalid_selections)}[/red]")
                 continue
 
             if selected:

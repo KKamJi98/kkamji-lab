@@ -95,7 +95,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         configs = list_kubeconfig_files()
         if not configs:
             console.print("[red]No kubeconfig files found in ~/.kube[/red]")
-            console.print("[dim]Expected files: config, config_*, config-*[/dim]")
+            console.print("[dim]Expected files: *config*[/dim]")
             return 1
 
         current = parse_current_kubeconfig()
