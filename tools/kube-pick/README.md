@@ -58,6 +58,7 @@ end
 - Lists all kubeconfig files in `~/.kube` directory
 - Includes files whose names contain `config` (excluding backups)
 - Supports multiple selection (comma or space separated)
+- Select all configs by entering `all`
 - Updates shell rc file (`~/.zshrc`, `~/.bashrc`, etc.)
 - Creates automatic backups before modifications
 - Shows currently active configurations

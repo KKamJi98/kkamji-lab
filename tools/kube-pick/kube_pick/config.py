@@ -126,8 +126,14 @@ def get_user_selection(configs: list[Path]) -> Optional[list[Path]]:
                 "\n[cyan]Enter config numbers/names (comma or space separated)[/cyan]",
                 highlight=False,
             )
-            console.print("[dim]Example: 1,2,3 or config config_local[/dim]")
-            console.print("[dim]Enter 'q' to quit[/dim]\n")
+            console.print(
+                "[dim]Example: [/dim]"
+                "[bold green]1,2,3[/bold green]"
+                "[dim] or [/dim]"
+                "[bold green]all[/bold green]"
+                "[dim] or config config_local[/dim]"
+            )
+            console.print("[dim]Enter [/dim][bold green]'q'[/bold green][dim] to quit[/dim]\n")
 
             print("Selection: ", end="", file=sys.stderr, flush=True)
             raw_input = input().strip()
@@ -151,6 +157,9 @@ def get_user_selection(configs: list[Path]) -> Optional[list[Path]]:
             if not parts:
                 console.print("[yellow]No selection made.[/yellow]")
                 return None
+
+            if any(part.lower() == "all" for part in parts):
+                return configs
 
             selected: list[Path] = []
             invalid_selections: list[str] = []
