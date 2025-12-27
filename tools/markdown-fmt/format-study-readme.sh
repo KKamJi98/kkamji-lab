@@ -3,8 +3,8 @@
 # 통합 마크다운 포맷터: H2 구분선 추가 및 헤더 넘버링 자동 갱신
 
 TARGET_DIR="study"
-H2_FIXER="scripts/markdown-formatter/fix_md_h2_rules.py"
-RENUMBERER="scripts/renumber_readme.py"
+H2_FIXER="tools/markdown-fmt/markdown-formatter/fix_md_h2_rules.py"
+RENUMBERER="tools/markdown-fmt/renumber_readme.py"
 
 # 필수 파일 존재 확인
 if [ ! -f "$H2_FIXER" ]; then

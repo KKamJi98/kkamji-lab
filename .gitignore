@@ -25,3 +25,11 @@ vagrant-hyperv
 GEMINI.md
 AGENTS.md
 LAST_CODEX_RUN.md
+
+# Local tool artifacts
+tools/**/.venv/
+tools/**/.ruff_cache/
+tools/**/__pycache__/
+tools/**/*.pyc
+tools/**/.claude/
+tools/**/LAST_AGENT_RUN.md
