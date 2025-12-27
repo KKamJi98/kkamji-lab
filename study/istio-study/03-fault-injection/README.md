@@ -1,19 +1,59 @@
-# Istio Fault Injection
+# Istio Fault Injection 실습
+
+## 개요
 
 애플리케이션의 예외 처리 로직은 스테이징 환경에서 검증하기 어렵습니다. 운영 데이터와 연관된 장애는 검증 환경에서 재현이 힘들고, 동일한 장애 상황을 코드로 만드는 것도 번거롭습니다. 이로 인해 운영 환경에서 장애가 발생한 후에야 문제를 발견하고 수정하는 경우가 많습니다.
 
-Istio의 장애 주입(Fault Injection) 기능을 사용하면 네트워크 지연이나 오류 응답과 같은 다양한 장애 시나리오를 쉽게 시뮬레이션할 수 있습니다. 이를 통해 애플리케이션의 복원력과 오류 처리 능력을 테스트하고, Retry 로직이나 Timeout 설정이 올바르게 작동하는지 검증할 수 있습니다.
+**Istio의 장애 주입(Fault Injection)** 기능을 사용하면 네트워크 지연이나 오류 응답과 같은 다양한 장애 시나리오를 쉽게 시뮬레이션할 수 있습니다. 이를 통해 애플리케이션의 복원력과 오류 처리 능력을 테스트하고, Retry 로직이나 Timeout 설정이 올바르게 작동하는지 검증할 수 있습니다.
 
-애플리케이션 로그는 프로덕션 환경에서 성능 향상을 위해 간소화하는 경우가 많습니다. Istio를 사용하면 Envoy 프록시(istio-proxy) 로그를 통해 추가적인 정보를 수집할 수 있어, 장애 상황에서 문제를 더 쉽게 진단할 수 있습니다.
+### Fault Injection 유형
 
-- [Istio Docs - Istio Fault Injection](https://istio.io/latest/docs/tasks/traffic-management/fault-injection/)
+| 유형 | 설명 | 사용 사례 |
+|------|------|----------|
+| **Delay** | 요청에 지연 시간을 추가 | Timeout 설정 검증, 느린 서비스 시뮬레이션 |
+| **Abort** | 특정 HTTP 상태 코드로 요청 중단 | 에러 핸들링 로직 검증, 서비스 장애 시뮬레이션 |
+
+### 실습 아키텍처
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ Productpage │────▶│   Reviews   │────▶│   Ratings   │◀────│ Fault Inject│
+│   (Python)  │     │    (Java)   │     │   (Node.js) │     │ (Delay/Abort)│
+│ timeout: 3s │     │ timeout:2.5s│     │             │     └─────────────┘
+└─────────────┘     │ (10s black) │     └─────────────┘
+       │            └─────────────┘
+       ▼
+┌─────────────┐
+│   Details   │
+│    (Ruby)   │
+└─────────────┘
+```
+
+### 참고 자료
+
+- [Istio Docs - Fault Injection](https://istio.io/latest/docs/tasks/traffic-management/fault-injection/)
 - [Istio Docs - HTTPFaultInjection](https://istio.io/latest/docs/reference/config/networking/virtual-service/#HTTPFaultInjection)
+- [KubeOPS - Fault Injection](https://cafe.naver.com/kubeops/823)
 
-> **참고 자료**: [KubeOPS - [아는 만큼 힘이 되는 트래픽 관리] Fault Injection](https://cafe.naver.com/kubeops/823)
+---
+
+## 목차
+
+1. [사전 세팅 리소스](#1-사전-세팅-리소스-request-routing-실습-내용-포함)
+2. [기본 모니터링 (Level-1)](#2-level-1-기본-모니터링)
+3. [Envoy 액세스 로그 확인 (Level-2)](#3-level-2-envoy-액세스-로그-확인)
+4. [Istio 관리 기능 (Level-3)](#4-level-3-istio-관리-기능)
+5. [Delay 테스트 (4s → 2s)](#5-istio-테스트---fault-injection-delay-4s--2s)
+6. [Delay 테스트 (2s → 11s)](#6-istio-테스트---fault-injection-delay-2s--11s)
+7. [App Timeout 코드 분석](#7-app-timeout-분석)
+8. [Abort 테스트](#8-abort-테스트)
+9. [리소스 정리](#9-리소스-정리)
 
 ---
 
 ## 1. 사전 세팅 리소스 (Request Routing 실습 내용 포함)
+
+Fault Injection 실습을 위해 먼저 Request Routing에서 사용한 DestinationRule과 VirtualService를 적용합니다.
 
 ```shell
 # Istio API - DestinationRule, VirtualService 적용 [Request Routing]
@@ -25,13 +65,17 @@ kubectl apply -f https://raw.githubusercontent.com/k8s-1pro/kubernetes-anothercl
 
 ## 2. (Level-1) 기본 모니터링
 
-### 2.1. rating 서비스에 작업 지연 상황 적용
+이 단계에서는 Fault Injection을 적용한 후 애플리케이션 로그만으로는 장애 원인을 파악하기 어렵다는 것을 확인합니다.
+
+### 2.1. Ratings 서비스에 Delay Fault Injection 적용
 
 ```shell
 # Istio API - DestinationRule, VirtualService 적용
 kubectl apply -f https://raw.githubusercontent.com/k8s-1pro/kubernetes-anotherclass-sprint5/refs/heads/main/542-fault-injection/5421/istio-api/destination-rule-ratings.yaml
 kubectl apply -f https://raw.githubusercontent.com/k8s-1pro/kubernetes-anotherclass-sprint5/refs/heads/main/542-fault-injection/5421/istio-api/virtual-service-ratings-delay.yaml
 ```
+
+> 💡 위 VirtualService는 `admin` 사용자가 ratings 서비스에 요청할 때 **4초 지연**을 발생시킵니다.
 
 ### 2.2. 접속 및 동작 확인
 
@@ -44,15 +88,20 @@ kubectl get svc -A | rg "30010|30020"
 # default        bookinfo-gateway-istio                               LoadBalancer   10.43.63.148    <pending>       15021:30225/TCP,80:30020/TCP                 23h
 # istio-system   istio-ingressgateway                                 LoadBalancer   10.43.172.82    192.168.205.2   15021:31354/TCP,80:30010/TCP,443:30372/TCP   25h
 
-# 페이지 테스트 (일반 사용자는 지연이 없지만 admin으로 로그인하면 지연이 생김())
+# 페이지 테스트
+# - 일반 사용자: 지연 없음
+# - admin 로그인: 4초 지연 발생 → productpage의 3초 timeout으로 인해 에러 발생
 open http://192.168.205.2:30010/productpage
 ```
+
+> ⚠️ **결과**: admin으로 로그인하면 ratings 서비스에서 별점(★)이 표시되지 않습니다. 이는 productpage의 timeout(3초)보다 지연(4초)이 길기 때문입니다.
 
 ![Rating Error](img/01_rating_error.png)
 
 ### 2.3. Application 로그 확인 (productpage, reviews, ratings)
 
-> 아래와 같이 앱 로그로 지연이나 오류에 대한 정보를 확인할 수 없는 경우가 있습니다.
+> ⚠️ **문제점**: 아래와 같이 애플리케이션 로그만으로는 지연이나 오류에 대한 정보를 확인할 수 없습니다.  
+> 프로덕션 환경에서는 성능을 위해 로그를 간소화하는 경우가 많아 더욱 파악이 어렵습니다.
 
 ```shell
 kubectl logs -n default --tail 10 deploy/productpage-v1
@@ -94,9 +143,13 @@ kubectl logs -n default --tail 10 deploy/ratings-v1
 
 ## 3. (Level-2) Envoy 액세스 로그 확인
 
-### 3.1. Sidecar(productpage, reviews, ratings) 로그 확인
+Istio를 사용하면 Envoy 사이드카 프록시(istio-proxy)의 로그를 통해 애플리케이션 로그에서 확인할 수 없는 추가 정보를 수집할 수 있습니다.
 
-> Envoy 사이드카 프록시의 액세스 로그를 통해 애플리케이션 로그에서 확인할 수 없었던 지연 및 오류 정보를 확인할 수 있습니다. `res_code: 0`은 upstream 연결 실패 또는 타임아웃을 의미하며, `upstream_info` 필드를 통해 어떤 서비스로의 요청에서 문제가 발생했는지 추적할 수 있습니다.
+### 3.1. Sidecar (productpage, reviews, ratings) 로그 확인
+
+> 💡 Envoy 사이드카 프록시의 액세스 로그를 통해 애플리케이션 로그에서 확인할 수 없었던 지연 및 오류 정보를 확인할 수 있습니다.  
+> - `res_code: 0`은 upstream 연결 실패 또는 타임아웃을 의미합니다.  
+> - `upstream_info` 필드를 통해 어떤 서비스로의 요청에서 문제가 발생했는지 추적할 수 있습니다.
 
 
 ```shell
@@ -139,9 +192,13 @@ kubectl logs -n default --tail 10 deploy/ratings-v1 -c istio-proxy
 
 ## 4. (Level-3) Istio 관리 기능
 
-### 4.1. Envoy 로그 설정 (Duration 추가)
+기본 Envoy 로그에는 요청 소요 시간(duration)이 포함되지 않습니다. Istio 설정을 통해 액세스 로그 포맷을 커스터마이징하여 더 상세한 디버깅 정보를 확인할 수 있습니다.
+
+### 4.1. Envoy 로그 설정 (Duration 필드 추가)
 
 - [Istio Docs - Envoy Access Logs](https://istio.io/v1.26/docs/tasks/observability/logs/access-log/#default-access-log-format)
+
+아래 설정은 `%DURATION%` 필드를 추가하여 각 요청의 소요 시간(밀리초)을 확인할 수 있도록 합니다.
 
 ```shell
 # Istio 설치 (Istio-cni 방식)
@@ -259,21 +316,27 @@ istioctl dashboard kiali
 
 ![Kiali Error Tracing](img/03_kiali_error_tracing.png)
 
-## 5. Istio 테스트 - Fault Injection 리소스 설정 (Delay: 4s -> 2s)
+## 5. Istio 테스트 - Fault Injection (Delay: 4s → 2s)
+
+Reviews 서비스의 timeout은 2.5초(일반 사용자) 또는 10초(black star)입니다. Delay를 4초에서 2초로 변경하면 timeout 내에 응답을 받을 수 있습니다.
 
 ![Delay Config Change](img/04_delay_config_change.png)
+
+### 5.1. VirtualService 수정
 
 ```shell
 # Istio API - VirtualService 수정 (fixed delay 4s -> 2s)
 kubectl edit virtualservice ratings-delay
 
-# 대시보드 재접속 후 DevTools로 지연시간 확인 (지연 시간 2초로 변경 확인)
+# 대시보드 재접속 후 DevTools로 지연시간 확인
 open http://192.168.205.2:30010/productpage
 ```
 
+> ✅ **결과**: Delay가 2초로 변경되어 reviews의 timeout(2.5초) 내에 응답을 받을 수 있게 됩니다. 별점(★)이 정상적으로 표시됩니다.
+
 ![Delay 2s Check](img/05_delay_2s_check.png)
 
-### Sidecar (Productpage, Reviews, Ratings) 로그 확인
+### 5.2. Sidecar (Productpage, Reviews, Ratings) 로그 확인
 
 ```shell
 kubectl logs -n default --tail 10 deploy/productpage-v1 -c istio-proxy
@@ -290,17 +353,27 @@ kubectl logs -n default --tail 10 deploy/ratings-v1 -c istio-proxy
 
 ![Delay 2s Logs](img/06_delay_2s_logs.png)
 
-## 5. Istio 테스트 - Fault Injection 리소스 설정 (Delay: 2s -> 11s)
+---
+
+## 6. Istio 테스트 - Fault Injection (Delay: 2s → 11s)
+
+Delay를 11초로 설정하면 Reviews의 timeout(2.5초/10초)을 초과하게 됩니다. 이 경우 Productpage는 Reviews 서비스를 호출할 때 재시도(Retry)를 수행합니다.
+
+### 6.1. VirtualService 수정
 
 ```shell
 # Istio API - VirtualService 수정 (fixed delay 2s -> 11s)
 kubectl edit virtualservice ratings-delay
 
-# 대시보드 재접속 후 DevTools로 지연시간 확인 (지연 시간 -> 6초)
+# 대시보드 재접속 후 DevTools로 지연시간 확인
+# 예상: 11초 지연이지만 실제로는 6초 (3초 timeout x 2회 재시도)
 open http://192.168.205.2:30010/productpage
 ```
 
-### Sidecar (Productpage, Reviews, Ratings) 로그 확인
+> 💡 **분석**: productpage는 reviews 서비스 호출 시 3초 timeout을 적용하고, timeout 발생 시 1회 재시도합니다.  
+> 따라서 총 소요 시간은 약 6초(3초 × 2).
+
+### 6.2. Sidecar (Productpage, Reviews, Ratings) 로그 확인
 
 ```shell
 kubectl logs -n default --tail 10 deploy/productpage-v1 -c istio-proxy
@@ -324,18 +397,38 @@ kubectl logs -n default --tail 10 deploy/ratings-v1 -c istio-proxy
 
 ![Delay 11s Retry Logs](img/07_delay_11s_retry_logs.png)
 
-## 6. App timeout 확인
+---
+
+## 7. App Timeout 분석
+
+각 서비스별로 설정된 Timeout 값을 코드에서 확인해봅니다. Fault Injection 테스트 시 이 Timeout 값을 고려하여 적절한 지연 시간을 설정해야 합니다.
 
 ![App Timeout Code](img/08_app_timeout_code.png)
 
-- Productpage (Python) : https://github.com/istio/istio/blob/master/samples/bookinfo/src/productpage/productpage.py
-  - `res = send_request(url, headers=headers, timeout=3.0)`
-- Review (Java) : https://github.com/istio/istio/blob/master/samples/bookinfo/src/reviews/reviews-application/src/main/java/application/rest/LibertyRestEndpoint.java
-  - `timeout=star_color.equals("black") ? 10000 : 2500`
-- Ratings (Node) : https://github.com/istio/istio/blob/master/samples/bookinfo/src/ratings/ratings.js
-  - `setTimeout(getLocalReviewsSuccessful, 7000, res, productId)`
+### 서비스별 Timeout 설정
 
-## Kiali 대시보드 확인
+| 서비스 | 언어 | Timeout 설정 |
+|--------|------|-------------|
+| **Productpage** | Python | 3.0초 (`timeout=3.0`) |
+| **Reviews** | Java | 일반: 2.5초 / Black star: 10초 |
+| **Ratings** | Node.js | 7초 (서버 응답 지연 시뮬레이션) |
+
+### 소스 코드 참고 링크
+
+- **Productpage (Python)**: [productpage.py](https://github.com/istio/istio/blob/master/samples/bookinfo/src/productpage/productpage.py)
+  ```python
+  res = send_request(url, headers=headers, timeout=3.0)
+  ```
+- **Reviews (Java)**: [LibertyRestEndpoint.java](https://github.com/istio/istio/blob/master/samples/bookinfo/src/reviews/reviews-application/src/main/java/application/rest/LibertyRestEndpoint.java)
+  ```java
+  timeout = star_color.equals("black") ? 10000 : 2500
+  ```
+- **Ratings (Node.js)**: [ratings.js](https://github.com/istio/istio/blob/master/samples/bookinfo/src/ratings/ratings.js)
+  ```javascript
+  setTimeout(getLocalReviewsSuccessful, 7000, res, productId)
+  ```
+
+### Kiali 대시보드 확인
 
 ```shell
 istioctl dashboard kiali
@@ -343,20 +436,28 @@ istioctl dashboard kiali
 
 ![Kiali Traffic Graph](img/09_kiali_traffic_graph.png)
 
-## 7. Abort 테스트
+---
+
+## 8. Abort 테스트
+
+Delay와 달리 **Abort**는 특정 HTTP 상태 코드로 요청을 즉시 실패시킵니다. 이를 통해 서비스 장애 상황에서 애플리케이션의 에러 핸들링 로직을 검증할 수 있습니다.
+
+### 8.1. Abort VirtualService 적용
 
 ```shell
-# Virtualservice - Delay 삭제
+# VirtualService - Delay 삭제
 kubectl delete virtualservice -n default ratings-delay
 
-# Virtualservice - Abort 생성
+# VirtualService - Abort 생성
 kubectl apply -f https://raw.githubusercontent.com/k8s-1pro/kubernetes-anotherclass-sprint5/refs/heads/main/542-fault-injection/5421/istio-api/virtual-service-ratings-abort.yaml
 
-# Abort 내용 확인
+# Abort 설정 내용 확인
 kubectl get virtualservice -n default ratings-abort -o yaml | kubectl neat
 ```
 
-아래 VirtualService는 `admin` 사용자가 ratings 서비스에 요청할 때 100% 확률로 HTTP 500 에러를 반환하도록 설정합니다. `fault.abort` 필드를 통해 실제 서비스 장애 없이 에러 응답을 시뮬레이션할 수 있으며, 이를 통해 애플리케이션의 에러 핸들링 로직을 검증할 수 있습니다.
+### 8.2. Abort VirtualService 설명
+
+아래 VirtualService는 `admin` 사용자가 ratings 서비스에 요청할 때 **100% 확률로 HTTP 500 에러**를 반환하도록 설정합니다. `fault.abort` 필드를 통해 실제 서비스 장애 없이 에러 응답을 시뮬레이션할 수 있으며, 이를 통해 애플리케이션의 에러 핸들링 로직을 검증할 수 있습니다.
 
 ```yaml
 apiVersion: networking.istio.io/v1
@@ -387,19 +488,52 @@ spec:
         subset: v1
 ```
 
-### 대시보드 접속 및 Kiali 확인
+### 8.3. 대시보드 접속 및 결과 확인
 
 ```shell
 # admin으로 로그인 (비밀번호는 아무거나)
 open http://192.168.205.2:30010/productpage
 ```
 
+> ⚠️ **결과**: admin으로 로그인하면 ratings 서비스가 HTTP 500 에러를 반환하므로 별점(★) 대신 에러 메시지가 표시됩니다.
+
 ![Ratings Abort Error](img/10_ratings_abort_error.png)
 
-## 리소스 정리
+---
+
+## 9. 리소스 정리
+
+실습이 완료되면 생성한 Istio 리소스를 정리합니다.
 
 ```shell
-# Istio API - Virtualservice , DestinationRule 삭제
+# Istio API - VirtualService, DestinationRule 삭제
 kubectl delete virtualservice -n default ratings-abort reviews
 kubectl delete destinationrule -n default ratings reviews
 ```
+
+---
+
+## 정리
+
+### 핵심 학습 내용
+
+1. **Fault Injection 유형**
+   - **Delay**: 요청에 지연 시간을 추가하여 Timeout 로직 검증
+   - **Abort**: 특정 HTTP 상태 코드로 요청 실패 시뮬레이션
+
+2. **모니터링 레벨**
+   - **Level-1**: 애플리케이션 로그 (제한적인 정보)
+   - **Level-2**: Envoy 사이드카 로그 (`res_code`, `upstream_info`)
+   - **Level-3**: Istio 커스텀 로그 포맷 (`duration` 필드 추가)
+
+3. **Timeout과 Retry 동작 이해**
+   - 각 서비스별 Timeout 설정 확인의 중요성
+   - Timeout 초과 시 자동 Retry 동작 분석
+
+### 트러블슈팅 팁
+
+| 증상 | 확인 방법 | 해결책 |
+|------|----------|--------|
+| `res_code: 0` | Envoy 로그 확인 | Timeout 설정 조정 |
+| 예상보다 긴 응답 시간 | `duration` 필드 확인 | Retry 횟수 확인 |
+| HTTP 500 에러 | Abort 설정 확인 | VirtualService 수정/삭제 |
