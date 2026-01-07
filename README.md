@@ -50,11 +50,11 @@
 
 | 도구 | 목적 | 안내 |
 | --- | --- | --- |
-| domain-resource-tracer | AWS 도메인 기반 리소스 추적 | `tools/domain-resource-tracer/README.md` |
-| kube-pick | kubeconfig 빠른 전환 | `tools/kube-pick/README.md` |
-| kubeconfig-cleaner | kubeconfig 정리/정제 | `tools/kubeconfig-cleaner/README.md` |
-| kubeconfig-merger | kubeconfig 병합 | `tools/kubeconfig-merger/README.md` |
-| markdown-fmt | study README 포맷/번호 정리 | `tools/markdown-fmt/` |
+| domain-resource-tracer | Route53 도메인에서 연결된 AWS 리소스(ALB, CloudFront 등) 추적 | `tools/domain-resource-tracer/README.md` |
+| kube-pick | 여러 kubeconfig 파일 중 원하는 컨텍스트 선택/전환 | `tools/kube-pick/README.md` |
+| kubeconfig-cleaner | 사용하지 않는 cluster/user 엔트리 정리 | `tools/kubeconfig-cleaner/README.md` |
+| kubeconfig-merger | 여러 kubeconfig 파일을 하나로 병합 | `tools/kubeconfig-merger/README.md` |
+| markdown-fmt | study README 헤더 번호 자동 정리 | `tools/markdown-fmt/` |
 
 ---
 
