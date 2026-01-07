@@ -6,9 +6,8 @@
 
 ## 1. 빠른 안내
 
-- `study/`: 기술 스터디 및 실습 노트
-- `tools/`: 실습/운영을 위한 CLI 도구 모음
-- `skills/`: 자동화 스킬 정의 및 보조 스크립트
+- `study/`: 기술 스터디 및 실습 노트 (Cilium, Istio, ArgoCD 등)
+- `tools/`: 실습/운영을 위한 Python CLI 도구 모음
 
 ---
 
@@ -28,8 +27,6 @@
 │   ├── kubeconfig-cleaner/
 │   ├── kubeconfig-merger/
 │   └── markdown-fmt/
-├── skills/
-│   └── blog-post-generator/
 └── README.md
 ```
 
@@ -39,11 +36,11 @@
 
 | 트랙 | 내용 | 시작 지점 |
 | --- | --- | --- |
-| Cilium Study | Vagrant 기반 K8s 클러스터 + Cilium 실습 | `study/cilium-study/README.md` |
-| Istio Study | Istio 설치/운영 및 모니터링 | `study/istio-study/README.md` |
-| CI/CD Study (ArgoCD) | GitOps/ArgoCD 실습 | `study/ci-cd-study/README.md` |
-| Jenkins Operator | Jenkins Operator 설치 실습 | `study/jenkins/README.md` |
-| AWS (Kinesis) | Kinesis 디렉터리만 존재 | `study/aws/README.md` |
+| Cilium Study | eBPF 기반 CNI, Vagrant K8s 클러스터에서 Hubble/네트워크 정책 실습 | `study/cilium-study/README.md` |
+| Istio Study | 서비스 메시 설치, 트래픽 라우팅, Fault Injection, 모니터링 | `study/istio-study/README.md` |
+| CI/CD Study (ArgoCD) | GitOps 기반 선언적 배포, ArgoCD 설치 및 운영 | `study/ci-cd-study/README.md` |
+| Jenkins Operator | Kubernetes 환경 Jenkins Operator 설치/구성 | `study/jenkins/README.md` |
+| AWS (Kinesis) | Kinesis 스트리밍 실험 (WIP) | `study/aws/README.md` |
 
 ---
 
