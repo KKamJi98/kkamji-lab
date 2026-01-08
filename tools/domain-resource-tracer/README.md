@@ -42,6 +42,8 @@ uv run drt trace "api.*"
 
 ## 사용법
 
+### 정방향 추적 (Domain → Resource)
+
 ```bash
 # 도메인 패턴으로 리소스 체인 추적
 drt trace "api\.example\.com"
@@ -53,7 +55,35 @@ drt trace "api.*" --json
 
 # 상세 출력
 drt trace "api.*" --verbose
+```
 
+### 역방향 추적 (Resource → Domain)
+
+```bash
+# LB DNS로 역추적
+drt reverse-trace "k8s-xxx.elb.ap-northeast-2.amazonaws.com"
+
+# EC2 Instance ID로 역추적
+drt reverse-trace "i-1234567890abcdef0"
+
+# EC2 Private IP로 역추적
+drt reverse-trace "10.0.1.100"
+
+# EC2 Private DNS로 역추적 (EKS 노드명)
+drt reverse-trace "ip-10-0-1-100.ap-northeast-2.compute.internal"
+
+# EC2 Name 태그로 역추적
+drt reverse-trace "my-web-server"
+
+# 옵션
+drt reverse-trace "..." --json      # JSON 출력
+drt reverse-trace "..." --verbose   # 상세 출력
+drt reverse-trace "..." --region ap-northeast-2  # 리전 지정
+```
+
+### 기타 명령어
+
+```bash
 # Route53 Hosted Zone 목록
 drt list-zones
 
@@ -63,6 +93,44 @@ drt list-records Z1234567890 --pattern "api.*"
 
 ## 추적 흐름
 
+### 정방향 추적
+
 ```text
-Domain → Route53 → CloudFront/ALB/NLB → Origin/Target Group → EC2/S3
+Domain Pattern (정규표현식)
+    ↓
+Route53 검색
+    ↓
+CloudFront / ALB / NLB
+    ↓
+Origin / Target Group
+    ↓
+EC2 / S3
 ```
+
+### 역방향 추적
+
+```text
+EC2 (Instance ID / IP / Private DNS / Name)
+    ↓
+Target Group (ENI IP로 매칭, Pod IP 포함)
+    ↓
+Load Balancer
+    ↓
+Route53 레코드 + CloudFront Distribution
+```
+
+## 지원하는 입력 형식 (reverse-trace)
+
+| 형식 | 예시 | 설명 |
+|------|-----|------|
+| LB DNS | `*.elb.amazonaws.com` | ALB/NLB DNS |
+| EC2 Instance ID | `i-1234567890abcdef0` | EC2 인스턴스 ID |
+| EC2 IP | `10.0.1.100` | Private/Public IP |
+| EC2 Private DNS | `ip-10-0-1-100.*.compute.internal` | EKS 노드명 |
+| EC2 Name | `my-web-server` | Name 태그 (와일드카드 지원) |
+
+## EKS 환경 지원
+
+- **ENI Secondary IP 매칭**: VPC CNI가 Pod에 할당한 IP도 추적
+- **Private DNS 지원**: `kubectl get nodes` 출력의 노드명으로 직접 검색
+- **IP Target Type**: Target Group이 IP 타입인 경우에도 EC2 → Pod 연결 추적
