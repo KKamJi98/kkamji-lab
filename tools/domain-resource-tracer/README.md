@@ -14,6 +14,13 @@ uv tool install .
 drt trace "api.*"
 ```
 
+### 개발 모드 설치 (권장)
+
+```bash
+# editable 모드로 설치 - 코드 변경이 바로 반영됨
+uv tool install --editable .
+```
+
 ### 업데이트 / 재설치
 
 ```bash
@@ -24,7 +31,7 @@ uv tool install . --force
 uv sync && uv tool install . --force --reinstall
 ```
 
-> **Note**: `--force`만 사용하면 빌드 캐시가 남아있어 코드 변경이 반영되지 않을 수 있습니다.
+> **Note**: editable 모드가 아닌 경우, `--force`만 사용하면 빌드 캐시가 남아있어 코드 변경이 반영되지 않을 수 있습니다.
 > 코드 수정 후에는 `uv sync`로 로컬 빌드를 갱신한 뒤 `--reinstall` 옵션을 함께 사용하세요.
 
 ### 제거

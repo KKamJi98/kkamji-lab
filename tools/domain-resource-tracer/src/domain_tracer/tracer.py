@@ -712,16 +712,16 @@ def find_ec2_by_identifier(identifier: str, region: str = "ap-northeast-2") -> l
             # Instance ID로 직접 조회
             resp = ec2.describe_instances(InstanceIds=[identifier])
         elif input_type == InputType.EC2_IP:
-            # Private IP 또는 Public IP로 조회
+            # ENI의 모든 Private IP로 조회 (primary + secondary, Pod IP 포함)
             resp = ec2.describe_instances(
                 Filters=[
                     {
-                        "Name": "private-ip-address",
+                        "Name": "network-interface.addresses.private-ip-address",
                         "Values": [identifier],
                     }
                 ]
             )
-            # Private IP로 못 찾으면 Public IP로 재시도
+            # ENI IP로 못 찾으면 Public IP로 재시도
             if not resp["Reservations"]:
                 resp = ec2.describe_instances(
                     Filters=[
@@ -738,7 +738,7 @@ def find_ec2_by_identifier(identifier: str, region: str = "ap-northeast-2") -> l
                 resp = ec2.describe_instances(
                     Filters=[
                         {
-                            "Name": "private-ip-address",
+                            "Name": "network-interface.addresses.private-ip-address",
                             "Values": [extracted_ip],
                         }
                     ]
