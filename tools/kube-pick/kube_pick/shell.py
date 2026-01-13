@@ -11,6 +11,33 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+SYNC_BLOCK_START = "# Added by kube-pick"
+SYNC_BLOCK_END = "# End kube-pick"
+
+
+def get_state_file() -> Path:
+    """Get the shared kubeconfig state file path."""
+    return Path.home() / ".config" / "kubepick" / "kubeconfig"
+
+
+def parse_kubeconfig_value(path_str: str) -> list[Path]:
+    """Parse colon-separated kubeconfig paths into Path objects."""
+    paths: list[Path] = []
+    for p in path_str.split(":"):
+        p = p.strip()
+        if p:
+            expanded = Path(os.path.expanduser(p))
+            paths.append(expanded)
+    return paths
+
+
+def write_state_file(selected_configs: list[Path]) -> Path:
+    """Write the selected kubeconfig paths to the shared state file."""
+    state_path = get_state_file()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(":".join(str(p) for p in selected_configs))
+    return state_path
+
 
 class ShellConfig:
     """Shell configuration class to handle different shell types."""
@@ -41,6 +68,71 @@ class ShellConfig:
             return re.compile(r"^set -[gx] KUBECONFIG\s+.+$", re.MULTILINE)
         else:
             return re.compile(r"^export\s+KUBECONFIG=.+$", re.MULTILINE)
+
+    def get_sync_block(self) -> str:
+        """Generate a shell-specific sync block for shared kubeconfig state."""
+        state_file = "$HOME/.config/kubepick/kubeconfig"
+
+        if self.name == "fish":
+            return "\n".join(
+                [
+                    SYNC_BLOCK_START,
+                    "function kubepick_sync --on-event fish_prompt",
+                    f'    set -l f "{state_file}"',
+                    "    if test -f $f",
+                    "        set -gx KUBECONFIG (cat $f)",
+                    "    end",
+                    "end",
+                    "kubepick_sync",
+                    SYNC_BLOCK_END,
+                ]
+            )
+
+        if self.name == "bash":
+            return "\n".join(
+                [
+                    SYNC_BLOCK_START,
+                    "kubepick_sync() {",
+                    f'  local f="{state_file}"',
+                    '  if [ -f "$f" ]; then',
+                    '    export KUBECONFIG="$(cat "$f")"',
+                    "  fi",
+                    "}",
+                    "kubepick_sync",
+                    'case ";${PROMPT_COMMAND:-};" in',
+                    '  *";kubepick_sync;"*) ;;',
+                    '  *) if [[ -n "${PROMPT_COMMAND:-}" ]]; then',
+                    '       PROMPT_COMMAND="kubepick_sync;${PROMPT_COMMAND}"',
+                    "     else",
+                    '       PROMPT_COMMAND="kubepick_sync"',
+                    "     fi;;",
+                    "esac",
+                    SYNC_BLOCK_END,
+                ]
+            )
+
+        return "\n".join(
+            [
+                SYNC_BLOCK_START,
+                "kubepick_sync() {",
+                f'  local f="{state_file}"',
+                '  if [ -f "$f" ]; then',
+                '    export KUBECONFIG="$(cat "$f")"',
+                "  fi",
+                "}",
+                "kubepick_sync",
+                'if [[ -z "${precmd_functions[(r)kubepick_sync]}" ]]; then',
+                "  precmd_functions+=(kubepick_sync)",
+                "fi",
+                SYNC_BLOCK_END,
+            ]
+        )
+
+    def get_sync_block_pattern(self) -> re.Pattern:
+        """Get regex pattern to match kube-pick sync block."""
+        start = re.escape(SYNC_BLOCK_START)
+        end = re.escape(SYNC_BLOCK_END)
+        return re.compile(rf"{start}.*?{end}", re.DOTALL)
 
 
 def detect_shell() -> str:
@@ -138,6 +230,16 @@ def parse_current_kubeconfig(shell_name: Optional[str] = None) -> list[Path]:
     Returns:
         List of currently configured kubeconfig paths
     """
+    state_path = get_state_file()
+    if state_path.exists():
+        try:
+            content = state_path.read_text().strip()
+            if not content:
+                return []
+            return parse_kubeconfig_value(content)
+        except Exception as e:
+            logger.error(f"Failed to read kube-pick state file: {e}")
+
     rc_path, shell_config = get_rc_path(shell_name)
 
     if not rc_path.exists():
@@ -168,16 +270,7 @@ def parse_current_kubeconfig(shell_name: Optional[str] = None) -> list[Path]:
                 return []
             path_str = line[eq_pos + 1 :].strip("\"'")
 
-        # Parse colon-separated paths
-        paths = []
-        for p in path_str.split(":"):
-            p = p.strip()
-            if p:
-                # Expand ~ to home directory
-                expanded = Path(os.path.expanduser(p))
-                paths.append(expanded)
-
-        return paths
+        return parse_kubeconfig_value(path_str)
 
     except Exception as e:
         logger.error(f"Failed to parse current KUBECONFIG: {e}")
@@ -208,45 +301,32 @@ def update_kubeconfig(
             return False, None
 
     try:
+        write_state_file(selected_configs)
+    except Exception as e:
+        logger.error(f"Failed to write kube-pick state file: {e}")
+        return False, None
+
+    try:
         content = rc_path.read_text()
-        pattern = shell_config.get_kubeconfig_pattern()
-        new_line = shell_config.get_kubeconfig_line(selected_configs)
+        pattern = shell_config.get_sync_block_pattern()
+        new_block = shell_config.get_sync_block()
 
         # Check if already set to same value
         match = pattern.search(content)
-        if match and match.group(0) == new_line:
-            logger.info("KUBECONFIG already set to selected value, no changes needed")
+        if match and match.group(0) == new_block:
+            logger.info("kube-pick sync block already up to date, no changes needed")
             return True, None
 
         # Create backup
         backup_path = backup_rc_file(rc_path)
 
         if match:
-            # Replace existing line
-            new_content = pattern.sub(new_line, content)
-            logger.info("Replacing existing KUBECONFIG line")
+            # Replace existing block
+            new_content = pattern.sub(new_block, content)
+            logger.info("Replacing existing kube-pick sync block")
         else:
-            # Check for commented KUBECONFIG lines and add after them
-            commented_pattern = re.compile(r"^#\s*export\s+KUBECONFIG=.+$", re.MULTILINE)
-            commented_matches = list(commented_pattern.finditer(content))
-
-            if commented_matches:
-                # Insert after the last commented KUBECONFIG line
-                last_match = commented_matches[-1]
-                insert_pos = last_match.end()
-                new_content = (
-                    content[:insert_pos]
-                    + f"\n{new_line}"
-                    + content[insert_pos:]
-                )
-                logger.info("Adding KUBECONFIG after existing commented lines")
-            else:
-                # Add at the end
-                new_content = (
-                    content.rstrip()
-                    + f"\n\n# kubernetes (managed by kube-pick)\n{new_line}\n"
-                )
-                logger.info("Adding new KUBECONFIG line at end of file")
+            new_content = content.rstrip() + f"\n\n{new_block}\n"
+            logger.info("Adding kube-pick sync block at end of file")
 
         rc_path.write_text(new_content)
         logger.info(f"Updated {rc_path}")

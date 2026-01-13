@@ -16,6 +16,7 @@ from kube_pick.shell import (
     detect_shell,
     generate_export_command,
     get_rc_path,
+    get_state_file,
     parse_current_kubeconfig,
     update_kubeconfig,
 )
@@ -68,7 +69,7 @@ def show_current_config() -> int:
             status = "[green]exists[/green]" if exists else "[red]not found[/red]"
             console.print(f"  {path} ({status})")
     else:
-        console.print("[yellow]No KUBECONFIG currently set in shell rc file[/yellow]")
+        console.print(f"[yellow]No kube-pick state file found at {get_state_file()}[/yellow]")
     return 0
 
 
@@ -122,6 +123,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             console.print(f"[dim]Backup created: {backup_path}[/dim]")
 
         console.print(f"[green]Updated {rc_path}[/green]")
+        console.print(f"[dim]Synced state: {get_state_file()}[/dim]")
 
         # Print export command for eval
         export_cmd = generate_export_command(selected, shell_name)
@@ -132,6 +134,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             highlight=False,
         )
         console.print('[bold]eval "$(kubepick)"[/bold]')
+        console.print("[dim]Other terminals sync on next prompt[/dim]")
         console.print("[dim]Or: source your rc file[/dim]")
 
         return 0

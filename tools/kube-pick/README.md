@@ -34,6 +34,15 @@ kubepick -c
 eval "$(kubepick)"
 ```
 
+## Sync Behavior
+
+`kubepick` stores the selected kubeconfig paths in `~/.config/kubepick/kubeconfig`
+and inserts a small sync block into your shell rc file (zsh/bash/fish). This makes
+all open terminals pick up changes on the next prompt.
+
+If you want to remove it, delete the block between `# Added by kube-pick` and
+`# End kube-pick` in your rc file.
+
 ## Alias Setup
 
 Add to your `~/.zshrc` or `~/.bashrc`:
@@ -59,6 +68,7 @@ end
 - Includes files whose names contain `config` (excluding backups)
 - Supports multiple selection (comma or space separated)
 - Select all configs by entering `all`
-- Updates shell rc file (`~/.zshrc`, `~/.bashrc`, etc.)
+- Syncs `KUBECONFIG` across terminals via `~/.config/kubepick/kubeconfig`
+- Updates shell rc file (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`)
 - Creates automatic backups before modifications
 - Shows currently active configurations
