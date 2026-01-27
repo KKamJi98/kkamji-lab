@@ -9,7 +9,7 @@ Git worktree 구조의 bare repository를 관리하는 CLI 도구입니다.
 - **wt add/remove**: worktree 추가/삭제
 - **wt status**: 모든 worktree의 상태 (clean/dirty, sync 상태) 확인
 - **wt fetch**: bare repo에서 `git fetch --all --prune` 실행
-- **wt pull**: fetch 후 모든 worktree를 fast-forward로 동기화
+- **wt pull**: fetch 후 모든 worktree를 동기화 (기본 ff-only, `--rebase` 옵션)
 - **wt upstream**: 모든 worktree에 `origin/<branch>` upstream 자동 설정
 
 ## Installation
@@ -61,6 +61,9 @@ wt add staging
 # 새 브랜치 생성하면서 worktree 추가
 wt add feat/my-feature -c
 
+# 특정 브랜치 기반으로 새 브랜치 생성 (예: staging에서 분기)
+wt add chore/test123 -c --base staging
+
 # worktree 삭제
 wt remove staging
 
@@ -85,6 +88,10 @@ wt f
 # fetch + 모든 worktree 동기화 (ff-only)
 wt pull
 wt p
+
+# rebase 모드로 동기화
+wt pull --rebase
+wt p -r
 ```
 
 ### 기타
@@ -199,7 +206,8 @@ git worktree add ../staging staging
 
 ## Safety Features
 
-- **ff-only**: `wt pull`은 fast-forward만 수행합니다. 로컬 커밋이 있으면 실패합니다.
+- **ff-only by default**: `wt pull`은 기본적으로 fast-forward만 수행합니다. 로컬 커밋이 있으면 실패합니다.
+- **optional rebase**: `--rebase` 옵션 사용 시 rebase 수행, 충돌 시 자동 abort됩니다.
 - **dirty check**: uncommitted 변경이 있는 worktree는 자동으로 스킵합니다.
 - **no upstream skip**: upstream이 설정되지 않은 브랜치는 스킵합니다.
 
@@ -212,7 +220,8 @@ git worktree add ../staging staging
 | `wt remove <branch>` | `rm` | worktree 삭제 |
 | `wt status` | `st` | 모든 worktree 상태 확인 |
 | `wt fetch` | `f` | `git fetch --all --prune` |
-| `wt pull` | `p` | fetch + ff-only merge |
+| `wt pull` | `p` | fetch + ff-only (기본) |
+| `wt pull --rebase` | `p -r` | fetch + rebase |
 | `wt list` | `ls` | worktree 목록 |
 | `wt upstream` | `up` | upstream 자동 설정 |
 

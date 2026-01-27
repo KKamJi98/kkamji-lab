@@ -205,16 +205,17 @@ def cmd_fetch(bare_repo: Path) -> int:
     return 0
 
 
-def cmd_pull(bare_repo: Path) -> int:
-    """Pull (fast-forward only) all worktrees."""
+def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
+    """Pull all worktrees (ff-only by default, rebase with --rebase)."""
     # First fetch
     print(f"{Color.BOLD}Step 1: Fetch{Color.RESET}")
     fetch_result = cmd_fetch(bare_repo)
     if fetch_result != 0:
         return fetch_result
 
+    mode = "Rebase" if rebase else "Sync"
     print()
-    print(f"{Color.BOLD}Step 2: Sync worktrees{Color.RESET}")
+    print(f"{Color.BOLD}Step 2: {mode} worktrees{Color.RESET}")
 
     worktrees = get_worktrees(bare_repo)
     if not worktrees:
@@ -243,17 +244,32 @@ def cmd_pull(bare_repo: Path) -> int:
             skip_count += 1
             continue
 
-        # Try fast-forward merge
-        result = run_git(["merge", "--ff-only", f"origin/{wt.branch}"], cwd=wt.path)
-        if result.returncode == 0:
-            if "Already up to date" in result.stdout:
-                print(f"  {Color.GREEN}OK{Color.RESET} already up to date")
+        if rebase:
+            # Try rebase onto remote branch
+            result = run_git(["rebase", f"origin/{wt.branch}"], cwd=wt.path)
+            if result.returncode == 0:
+                if "is up to date" in result.stdout or "Current branch" in result.stdout:
+                    print(f"  {Color.GREEN}OK{Color.RESET} already up to date")
+                else:
+                    print(f"  {Color.GREEN}OK{Color.RESET} rebased")
+                ok_count += 1
             else:
-                print(f"  {Color.GREEN}OK{Color.RESET} fast-forwarded")
-            ok_count += 1
+                # Abort failed rebase
+                run_git(["rebase", "--abort"], cwd=wt.path)
+                print(f"  {Color.RED}FAIL{Color.RESET} rebase failed (conflict?), aborted")
+                fail_count += 1
         else:
-            print(f"  {Color.RED}FAIL{Color.RESET} cannot fast-forward (diverged?)")
-            fail_count += 1
+            # Try fast-forward merge (default, safe)
+            result = run_git(["merge", "--ff-only", f"origin/{wt.branch}"], cwd=wt.path)
+            if result.returncode == 0:
+                if "Already up to date" in result.stdout:
+                    print(f"  {Color.GREEN}OK{Color.RESET} already up to date")
+                else:
+                    print(f"  {Color.GREEN}OK{Color.RESET} fast-forwarded")
+                ok_count += 1
+            else:
+                print(f"  {Color.RED}FAIL{Color.RESET} cannot fast-forward (diverged?)")
+                fail_count += 1
 
     print()
     print(f"Summary: ok={ok_count} skip={skip_count} fail={fail_count}")
@@ -464,8 +480,13 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
     return 0
 
 
-def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool) -> int:
+def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool, base: str | None) -> int:
     """Add a new worktree for a branch."""
+    # Validate: --base requires --create
+    if base and not create:
+        print(f"{Color.RED}Error:{Color.RESET} --base requires --create (-c) flag")
+        return 1
+
     # Determine worktree path
     if path is None:
         # Use branch name, replacing / with -
@@ -476,6 +497,8 @@ def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool) -> int
 
     print(f"Adding worktree for branch: {branch}")
     print(f"  Path: {wt_path}")
+    if base:
+        print(f"  Base: {base}")
     print()
 
     # Check if worktree path already exists
@@ -488,7 +511,17 @@ def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool) -> int
 
     if create:
         # Create new branch and worktree
-        if remote_exists:
+        if base:
+            # Create new branch from specified base branch
+            # First check if base branch exists (local or remote)
+            base_ref = base
+            if has_remote_branch(bare_repo, base):
+                base_ref = f"origin/{base}"
+            result = run_git(
+                ["worktree", "add", "-b", branch, str(wt_path), base_ref],
+                cwd=bare_repo,
+            )
+        elif remote_exists:
             # Branch exists on remote, create tracking branch
             result = run_git(
                 ["worktree", "add", "--track", "-b", branch, str(wt_path), f"origin/{branch}"],
@@ -597,6 +630,11 @@ def main() -> int:
         action="store_true",
         help="Create new branch if it doesn't exist",
     )
+    add_parser.add_argument(
+        "-b",
+        "--base",
+        help="Base branch to create new branch from (requires -c)",
+    )
 
     # remove command
     rm_parser = subparsers.add_parser("remove", aliases=["rm"], help="Remove a worktree")
@@ -613,7 +651,13 @@ def main() -> int:
     subparsers.add_parser(
         "fetch", aliases=["f"], help="Fetch all remotes (git fetch --all --prune)"
     )
-    subparsers.add_parser("pull", aliases=["p"], help="Fetch and sync all worktrees (ff-only)")
+    pull_parser = subparsers.add_parser("pull", aliases=["p"], help="Fetch and sync all worktrees")
+    pull_parser.add_argument(
+        "-r",
+        "--rebase",
+        action="store_true",
+        help="Use rebase instead of fast-forward merge",
+    )
     subparsers.add_parser("list", aliases=["ls"], help="List all worktrees")
     subparsers.add_parser(
         "upstream", aliases=["up"], help="Set upstream to origin/<branch> for all worktrees"
@@ -651,13 +695,13 @@ def main() -> int:
     elif args.command in ("fetch", "f"):
         return cmd_fetch(bare_repo)
     elif args.command in ("pull", "p"):
-        return cmd_pull(bare_repo)
+        return cmd_pull(bare_repo, args.rebase)
     elif args.command in ("list", "ls"):
         return cmd_list(bare_repo)
     elif args.command in ("upstream", "up"):
         return cmd_upstream(bare_repo)
     elif args.command in ("add", "a"):
-        return cmd_add(bare_repo, args.branch, args.path, args.create)
+        return cmd_add(bare_repo, args.branch, args.path, args.create, args.base)
     elif args.command in ("remove", "rm"):
         return cmd_remove(bare_repo, args.branch, args.force)
 
