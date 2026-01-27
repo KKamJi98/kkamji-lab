@@ -17,10 +17,6 @@ images:
     dest: grafana/grafana:11.4.0
 
   # 예시: 주석 해제하여 사용
-  # - chart: prometheus
-  #   source: quay.io/prometheus/prometheus:v2.50.0
-  #   dest: prometheus/prometheus:v2.50.0
-  #
   # - chart: nginx
   #   source: docker.io/library/nginx:1.25-alpine
   #   dest: nginx:1.25-alpine

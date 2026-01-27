@@ -7,8 +7,9 @@ crane 기반 컨테이너 이미지 ECR 미러링 도구
 외부 레지스트리(docker.io, quay.io, ghcr.io, public.ecr.aws 등)의 이미지를 Private ECR로 미러링합니다.
 
 **특징:**
+
 - **crane 기반**: docker보다 가볍고 빠른 레지스트리 전용 도구
-- **멀티 플랫폼**: `linux/amd64`, `linux/arm64` 지원
+- **플랫폼 선택**: `linux/amd64`, `linux/arm64`만 선택적 복사 (s390x, ppc64le 제외)
 - **병렬 처리**: `--parallel N` 옵션으로 빠른 미러링
 - **외부 설정**: 이미지 목록/설정을 YAML/env 파일로 분리
 - **digest 보존**: 원본과 동일한 digest 유지
@@ -66,10 +67,6 @@ images:
     source: docker.io/grafana/grafana:11.4.0
     dest: grafana/grafana:11.4.0
 
-  - chart: prometheus
-    source: quay.io/prometheus/prometheus:v2.50.0
-    dest: prometheus/prometheus:v2.50.0
-
   - chart: nginx
     source: docker.io/library/nginx:1.25-alpine
     dest: nginx:1.25-alpine
@@ -103,16 +100,16 @@ images:
 
 ### 전체 옵션
 
-| 옵션 | 설명 |
-|------|------|
-| `--dry-run` | 실제 실행 없이 명령어만 출력 |
-| `--skip-login` | ECR 로그인 단계 건너뛰기 |
-| `--verify` | 미러링 없이 검증만 실행 |
-| `--parallel N` | N개 이미지 병렬 처리 |
-| `--force` | 이미 존재하는 이미지도 덮어쓰기 |
-| `--config FILE` | 설정 파일 지정 (기본: config.env) |
+| 옵션            | 설명                                      |
+| --------------- | ----------------------------------------- |
+| `--dry-run`     | 실제 실행 없이 명령어만 출력              |
+| `--skip-login`  | ECR 로그인 단계 건너뛰기                  |
+| `--verify`      | 미러링 없이 검증만 실행                   |
+| `--parallel N`  | N개 이미지 병렬 처리                      |
+| `--force`       | 이미 존재하는 이미지도 덮어쓰기           |
+| `--config FILE` | 설정 파일 지정 (기본: config.env)         |
 | `--images FILE` | 이미지 목록 파일 지정 (기본: images.yaml) |
-| `-h, --help` | 도움말 출력 |
+| `-h, --help`    | 도움말 출력                               |
 
 ## 실행 흐름
 
@@ -125,7 +122,8 @@ images:
 
 3. 이미지 미러링
    ├─ 리포지토리 자동 생성
-   ├─ crane copy --platform=... 실행
+   ├─ 멀티플랫폼: crane index filter (지정 플랫폼만 복사)
+   ├─ 단일플랫폼: crane copy (그대로 복사)
    ├─ Rate limit 대응: 재시도 + exponential backoff
    └─ 이미 존재하는 이미지는 스킵 (--force로 덮어쓰기)
 
@@ -155,21 +153,23 @@ images:
 
 ## docker buildx vs crane 비교
 
-| 항목 | docker buildx | crane |
-|------|---------------|-------|
-| 설치 크기 | ~500MB+ (Docker 전체) | ~15MB |
-| 속도 | 보통 | 빠름 |
-| 로컬 pull | 필요 없음 | 필요 없음 |
-| 멀티 플랫폼 | `imagetools create` | `copy --platform` |
-| 의존성 | Docker daemon | 없음 |
+| 항목        | docker buildx         | crane                     |
+| ----------- | --------------------- | ------------------------- |
+| 설치 크기   | ~500MB+ (Docker 전체) | ~15MB                     |
+| 속도        | 보통                  | 빠름                      |
+| 로컬 pull   | 필요 없음             | 필요 없음                 |
+| 멀티 플랫폼 | `imagetools create`   | `index filter --platform` |
+| 의존성      | Docker daemon         | 없음                      |
 
 ## Rate Limit 대응
 
 ECR API rate limit 발생 시:
+
 - **자동 재시도**: 최대 5회 (exponential backoff: 10s → 20s → 40s → 60s)
 - **이미지 간 대기**: 기본 5초
 
 설정 조정:
+
 ```bash
 # config.env
 MAX_RETRIES=7
@@ -196,9 +196,14 @@ aws ecr get-login-password --region ap-northeast-2 | \
 ### 특정 이미지 수동 복사
 
 ```bash
-crane copy --platform=linux/amd64 --platform=linux/arm64 \
-  docker.io/grafana/grafana:11.4.0 \
-  123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/grafana/grafana:11.4.0
+# 멀티플랫폼 이미지 (amd64/arm64만 선택)
+crane index filter docker.io/grafana/grafana:11.4.0 \
+  --platform=linux/amd64 --platform=linux/arm64 \
+  -t 123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/grafana/grafana:11.4.0
+
+# 단일플랫폼 이미지
+crane copy docker.io/library/nginx:1.25-alpine \
+  123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/nginx:1.25-alpine
 ```
 
 ### digest 불일치

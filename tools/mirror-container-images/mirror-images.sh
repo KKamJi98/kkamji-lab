@@ -348,23 +348,50 @@ image_exists() {
 }
 
 # 플랫폼별 digest 가져오기
+# manifest list인 경우 해당 플랫폼의 digest, 단일 manifest인 경우 전체 digest 반환
 get_platform_digest() {
   local image=$1
   local platform=$2
 
-  crane manifest "$image" 2>/dev/null | \
-    yq -p json --arg platform "$platform" \
-    '.manifests[] | select(.platform.os + "/" + .platform.architecture == $platform) | .digest' 2>/dev/null
+  local manifest
+  manifest=$(crane manifest "$image" 2>/dev/null) || return 1
+
+  # manifest list (mediaType에 manifest.list 또는 index 포함)인지 확인
+  local media_type
+  media_type=$(echo "$manifest" | jq -r '.mediaType // ""' 2>/dev/null)
+
+  if [[ "$media_type" == *"manifest.list"* ]] || [[ "$media_type" == *"image.index"* ]]; then
+    # manifest list인 경우: 해당 플랫폼의 digest 반환
+    echo "$manifest" | jq -r --arg platform "$platform" \
+      '.manifests[] | select(.platform.os + "/" + .platform.architecture == $platform) | .digest' 2>/dev/null
+  else
+    # 단일 manifest인 경우: 이미지 전체 digest 반환
+    crane digest "$image" 2>/dev/null
+  fi
+}
+
+# 이미지가 멀티플랫폼인지 확인
+is_multiplatform() {
+  local image=$1
+  local manifest
+  manifest=$(crane manifest "$image" 2>/dev/null) || return 1
+
+  local media_type
+  media_type=$(echo "$manifest" | jq -r '.mediaType // ""' 2>/dev/null)
+
+  [[ "$media_type" == *"manifest.list"* ]] || [[ "$media_type" == *"image.index"* ]]
 }
 
 # 재시도 로직이 포함된 이미지 복사
+# 멀티플랫폼 이미지는 crane index filter로 지정된 플랫폼만 복사
+# 단일 플랫폼 이미지는 crane copy로 그대로 복사
 copy_image_with_retry() {
   local source=$1
   local dest=$2
   local attempt=1
   local delay=$INITIAL_DELAY
 
-  # 플랫폼 문자열을 crane 형식으로 변환 (linux/amd64,linux/arm64 -> --platform=linux/amd64 --platform=linux/arm64)
+  # 플랫폼 옵션 구성 (crane index filter용)
   local platform_args=()
   IFS=',' read -ra platforms <<< "$PLATFORMS"
   for p in "${platforms[@]}"; do
@@ -374,9 +401,22 @@ copy_image_with_retry() {
   while [ "$attempt" -le "$MAX_RETRIES" ]; do
     log_debug "복사 시도 ${attempt}/${MAX_RETRIES}: ${source} -> ${dest}"
 
-    if crane copy "${platform_args[@]}" "$source" "$dest" 2>&1; then
-      return 0
+    local output
+    if is_multiplatform "$source"; then
+      # 멀티플랫폼: crane index filter로 지정된 플랫폼만 복사
+      log_debug "멀티플랫폼 이미지 - crane index filter 사용 (${PLATFORMS})"
+      if output=$(crane index filter "$source" "${platform_args[@]}" -t "$dest" 2>&1); then
+        return 0
+      fi
+    else
+      # 단일 플랫폼: crane copy로 그대로 복사
+      log_debug "단일 플랫폼 이미지 - crane copy 사용"
+      if output=$(crane copy "$source" "$dest" 2>&1); then
+        return 0
+      fi
     fi
+
+    log_debug "crane 출력: ${output}"
 
     if [ "$attempt" -lt "$MAX_RETRIES" ]; then
       log_retry "시도 ${attempt}/${MAX_RETRIES} 실패. ${delay}초 후 재시도..."
@@ -406,7 +446,7 @@ mirror_single_image() {
   log_info "  Dest:   ${dest_full}"
 
   if [ "$DRY_RUN" = true ]; then
-    echo "  [DRY-RUN] crane copy --platform=${PLATFORMS} ${source} ${dest_full}"
+    echo "  [DRY-RUN] crane index filter ${source} --platform=${PLATFORMS} -t ${dest_full}"
     RESULT_STATUS["$idx"]="DRY_RUN"
     return 0
   fi
@@ -506,24 +546,39 @@ mirror_images_parallel() {
     echo "[${idx}] ${chart}: ${source} -> ${dest_full}"
 
     if [ "$DRY_RUN" = true ]; then
-      echo "  [DRY-RUN] crane copy ${source} ${dest_full}"
+      echo "  [DRY-RUN] crane index filter ${source} --platform=${PLATFORMS} -t ${dest_full}"
       echo "SUCCESS" > "'"${tmp_dir}"'/result_${idx}"
     elif [ "$FORCE_COPY" = false ] && crane manifest "$dest_full" &>/dev/null; then
       echo "  스킵 (이미 존재)"
       echo "SKIPPED" > "'"${tmp_dir}"'/result_${idx}"
     else
+      # 플랫폼 옵션 구성
       IFS="," read -ra platforms <<< "$PLATFORMS"
       platform_args=""
       for p in "${platforms[@]}"; do
         platform_args="$platform_args --platform=$p"
       done
 
-      if crane copy $platform_args "$source" "$dest_full" 2>&1; then
-        echo "  ✓ 성공"
-        echo "SUCCESS" > "'"${tmp_dir}"'/result_${idx}"
+      # 멀티플랫폼 여부 확인
+      media_type=$(crane manifest "$source" 2>/dev/null | jq -r ".mediaType // \"\"" 2>/dev/null)
+      if [[ "$media_type" == *"manifest.list"* ]] || [[ "$media_type" == *"image.index"* ]]; then
+        # 멀티플랫폼: crane index filter
+        if crane index filter "$source" $platform_args -t "$dest_full" >/dev/null 2>&1; then
+          echo "  ✓ 성공 (멀티플랫폼)"
+          echo "SUCCESS" > "'"${tmp_dir}"'/result_${idx}"
+        else
+          echo "  ✗ 실패"
+          echo "FAILED" > "'"${tmp_dir}"'/result_${idx}"
+        fi
       else
-        echo "  ✗ 실패"
-        echo "FAILED" > "'"${tmp_dir}"'/result_${idx}"
+        # 단일 플랫폼: crane copy
+        if crane copy "$source" "$dest_full" >/dev/null 2>&1; then
+          echo "  ✓ 성공 (단일)"
+          echo "SUCCESS" > "'"${tmp_dir}"'/result_${idx}"
+        else
+          echo "  ✗ 실패"
+          echo "FAILED" > "'"${tmp_dir}"'/result_${idx}"
+        fi
       fi
     fi
   '
@@ -601,40 +656,69 @@ verify_images() {
       continue
     fi
 
-    # 플랫폼별 digest 비교
+    # 소스가 멀티플랫폼인지 확인
+    local source_multiplatform=false
+    local ecr_multiplatform=false
+    is_multiplatform "$source" && source_multiplatform=true
+    is_multiplatform "$dest_full" && ecr_multiplatform=true
+
     local all_match=true
-    printf "  %-12s %-20s %-20s %s\n" "PLATFORM" "SOURCE" "ECR" "MATCH"
-    printf "  %s\n" "──────────────────────────────────────────────────────────"
 
-    for platform in "${platforms[@]}"; do
+    if [ "$source_multiplatform" = true ]; then
+      # 멀티플랫폼: 플랫폼별 digest 비교
+      printf "  %-12s %-20s %-20s %s\n" "PLATFORM" "SOURCE" "ECR" "MATCH"
+      printf "  %s\n" "──────────────────────────────────────────────────────────"
+
+      for platform in "${platforms[@]}"; do
+        local source_digest ecr_digest
+        source_digest=$(get_platform_digest "$source" "$platform")
+        ecr_digest=$(get_platform_digest "$dest_full" "$platform")
+
+        # digest 축약
+        local source_short="N/A"
+        local ecr_short="N/A"
+        [ -n "$source_digest" ] && [ "$source_digest" != "null" ] && source_short="${source_digest:0:19}"
+        [ -n "$ecr_digest" ] && [ "$ecr_digest" != "null" ] && ecr_short="${ecr_digest:0:19}"
+
+        if [ -z "$source_digest" ] || [ "$source_digest" = "null" ]; then
+          printf "  %-12s %-20s %-20s ${YELLOW}%s${NC}\n" "$platform" "N/A" "$ecr_short" "SKIP"
+        elif [ -z "$ecr_digest" ] || [ "$ecr_digest" = "null" ]; then
+          printf "  %-12s %-20s %-20s ${RED}%s${NC}\n" "$platform" "$source_short" "N/A" "MISSING"
+          all_match=false
+        elif [ "$source_digest" = "$ecr_digest" ]; then
+          printf "  %-12s %-20s %-20s ${GREEN}%s${NC}\n" "$platform" "$source_short" "$ecr_short" "✓"
+        else
+          printf "  %-12s %-20s %-20s ${RED}%s${NC}\n" "$platform" "$source_short" "$ecr_short" "✗"
+          all_match=false
+        fi
+      done
+    else
+      # 단일 플랫폼: 전체 digest 비교
+      printf "  %-12s %-20s %-20s %s\n" "TYPE" "SOURCE" "ECR" "MATCH"
+      printf "  %s\n" "──────────────────────────────────────────────────────────"
+
       local source_digest ecr_digest
-      source_digest=$(get_platform_digest "$source" "$platform")
-      ecr_digest=$(get_platform_digest "$dest_full" "$platform")
+      source_digest=$(crane digest "$source" 2>/dev/null)
+      ecr_digest=$(crane digest "$dest_full" 2>/dev/null)
 
-      # digest 축약
       local source_short="N/A"
       local ecr_short="N/A"
-      [ -n "$source_digest" ] && [ "$source_digest" != "null" ] && source_short="${source_digest:0:19}"
-      [ -n "$ecr_digest" ] && [ "$ecr_digest" != "null" ] && ecr_short="${ecr_digest:0:19}"
+      [ -n "$source_digest" ] && source_short="${source_digest:0:19}"
+      [ -n "$ecr_digest" ] && ecr_short="${ecr_digest:0:19}"
 
-      if [ -z "$source_digest" ] || [ "$source_digest" = "null" ]; then
-        printf "  %-12s %-20s %-20s ${YELLOW}%s${NC}\n" "$platform" "N/A" "$ecr_short" "SKIP"
-      elif [ -z "$ecr_digest" ] || [ "$ecr_digest" = "null" ]; then
-        printf "  %-12s %-20s %-20s ${RED}%s${NC}\n" "$platform" "$source_short" "N/A" "MISSING"
-        all_match=false
-      elif [ "$source_digest" = "$ecr_digest" ]; then
-        printf "  %-12s %-20s %-20s ${GREEN}%s${NC}\n" "$platform" "$source_short" "$ecr_short" "✓"
+      if [ "$source_digest" = "$ecr_digest" ]; then
+        printf "  %-12s %-20s %-20s ${GREEN}%s${NC}\n" "single" "$source_short" "$ecr_short" "✓"
       else
-        printf "  %-12s %-20s %-20s ${RED}%s${NC}\n" "$platform" "$source_short" "$ecr_short" "✗"
+        printf "  %-12s %-20s %-20s ${RED}%s${NC}\n" "single" "$source_short" "$ecr_short" "✗"
         all_match=false
       fi
-    done
+    fi
 
     if [ "$all_match" = true ]; then
-      log_info "  결과: ${GREEN}모든 플랫폼 digest 일치 ✓${NC}"
+      log_info "  결과: ${GREEN}digest 일치 ✓${NC}"
       ((verified++))
     else
-      log_error "  결과: ${RED}digest 불일치 발견 ✗${NC}"
+      log_error "  결과: ${RED}digest 불일치 ✗${NC}"
       ((failed++))
     fi
   done

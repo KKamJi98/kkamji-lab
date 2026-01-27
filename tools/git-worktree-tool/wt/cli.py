@@ -439,6 +439,13 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
         return 1
     print(f"  {Color.GREEN}OK{Color.RESET} created worktree: {default_branch}/")
 
+    # Set upstream for default branch
+    run_git(
+        ["branch", "--set-upstream-to", f"origin/{default_branch}", default_branch],
+        cwd=default_wt_path,
+    )
+    print(f"  {Color.GREEN}OK{Color.RESET} set upstream to origin/{default_branch}")
+
     # Step 4: Create additional worktrees if specified
     if worktrees:
         print()
@@ -464,6 +471,12 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
                 print(f"  {Color.YELLOW}WARN{Color.RESET} {branch} - {result.stderr.strip()}")
             else:
                 print(f"  {Color.GREEN}OK{Color.RESET} created worktree: {wt_path.name}/")
+                # Set upstream
+                run_git(
+                    ["branch", "--set-upstream-to", f"origin/{branch}", branch],
+                    cwd=wt_path,
+                )
+                print(f"  {Color.GREEN}OK{Color.RESET} set upstream to origin/{branch}")
 
     # Summary
     print()
