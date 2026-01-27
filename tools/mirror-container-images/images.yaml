@@ -1,0 +1,30 @@
+# Container Image Mirror List
+#
+# 형식:
+#   - chart: Helm chart 또는 애플리케이션 이름
+#     source: 원본 이미지 (registry/repo:tag)
+#     dest: ECR 대상 경로 (ECR_PREFIX가 앞에 붙음)
+#
+# 예시:
+#   source: quay.io/prometheus/prometheus:v2.50.0
+#   dest: prometheus/prometheus:v2.50.0
+#   → ${ECR_PREFIX}/prometheus/prometheus:v2.50.0
+
+images:
+  # Grafana
+  - chart: grafana
+    source: docker.io/grafana/grafana:11.4.0
+    dest: grafana/grafana:11.4.0
+
+  # 예시: 주석 해제하여 사용
+  # - chart: prometheus
+  #   source: quay.io/prometheus/prometheus:v2.50.0
+  #   dest: prometheus/prometheus:v2.50.0
+  #
+  # - chart: nginx
+  #   source: docker.io/library/nginx:1.25-alpine
+  #   dest: nginx:1.25-alpine
+  #
+  # - chart: aws-load-balancer-controller
+  #   source: public.ecr.aws/eks/aws-load-balancer-controller:v2.7.1
+  #   dest: eks/aws-load-balancer-controller:v2.7.1
