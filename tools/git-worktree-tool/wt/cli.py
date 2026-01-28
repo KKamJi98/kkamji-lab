@@ -419,6 +419,14 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
     if result.returncode == 0:
         print(f"  {Color.GREEN}OK{Color.RESET} fetched all branches")
 
+    # Create .git file pointing to .bare directory
+    git_file = target_path / ".git"
+    try:
+        git_file.write_text("gitdir: ./.bare\n")
+        print(f"  {Color.GREEN}OK{Color.RESET} created .git file")
+    except OSError as e:
+        print(f"  {Color.YELLOW}WARN{Color.RESET} failed to create .git file: {e}")
+
     # Step 3: Create main worktree
     print()
     print(f"{Color.BOLD}Step 3:{Color.RESET} Create worktrees")
@@ -446,13 +454,46 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
     )
     print(f"  {Color.GREEN}OK{Color.RESET} set upstream to origin/{default_branch}")
 
-    # Step 4: Create additional worktrees if specified
+    # Step 4: Create common branch worktrees (main, master, staging)
+    common_branches = ["main", "master", "staging"]
+    created_branches = {default_branch}  # Track created branches to avoid duplicates
+
+    print()
+    print(f"{Color.BOLD}Step 4:{Color.RESET} Create common branch worktrees")
+
+    for branch in common_branches:
+        if branch in created_branches:
+            continue
+
+        if not has_remote_branch(bare_path, branch):
+            continue
+
+        wt_path = target_path / branch
+        result = run_git(
+            ["worktree", "add", str(wt_path), branch],
+            cwd=bare_path,
+        )
+        if result.returncode != 0:
+            print(f"  {Color.YELLOW}WARN{Color.RESET} {branch} - {result.stderr.strip()}")
+        else:
+            print(f"  {Color.GREEN}OK{Color.RESET} created worktree: {branch}/")
+            # Set upstream
+            run_git(
+                ["branch", "--set-upstream-to", f"origin/{branch}", branch],
+                cwd=wt_path,
+            )
+            created_branches.add(branch)
+
+    if len(created_branches) == 1:
+        print(f"  {Color.BLUE}INFO{Color.RESET} no additional common branches found on remote")
+
+    # Step 5: Create additional worktrees if specified
     if worktrees:
         print()
-        print(f"{Color.BOLD}Step 4:{Color.RESET} Create additional worktrees")
+        print(f"{Color.BOLD}Step 5:{Color.RESET} Create additional worktrees")
         for branch in worktrees:
             branch = branch.strip()
-            if not branch or branch == default_branch:
+            if not branch or branch in created_branches:
                 continue
 
             # Determine worktree path (handle nested branches like feat/foo)
@@ -477,6 +518,7 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
                     cwd=wt_path,
                 )
                 print(f"  {Color.GREEN}OK{Color.RESET} set upstream to origin/{branch}")
+                created_branches.add(branch)
 
     # Summary
     print()
