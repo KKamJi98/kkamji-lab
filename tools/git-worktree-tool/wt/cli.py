@@ -608,6 +608,12 @@ def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool, base: 
             cwd=wt_path,
         )
         print(f"{Color.GREEN}OK{Color.RESET} set upstream to origin/{branch}")
+    elif create:
+        # New branch created, no remote yet
+        print()
+        print(f"{Color.YELLOW}Note:{Color.RESET} New branch created. To push and set upstream:")
+        print(f"  cd {wt_path}")
+        print(f"  git push -u origin {branch}")
 
     return 0
 
