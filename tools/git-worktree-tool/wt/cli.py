@@ -9,6 +9,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import argcomplete
+
 
 # ANSI Colors
 class Color:
@@ -84,6 +86,10 @@ def get_worktrees(bare_repo: Path) -> list[Worktree]:
                 branch = current_wt.get("branch", "").replace("refs/heads/", "")
                 commit = current_wt.get("HEAD", "")[:8]
 
+                # Mark detached HEAD state
+                if not branch and commit:
+                    branch = f"(detached {commit})"
+
                 if not is_bare and path.exists():
                     worktrees.append(Worktree(path=path, branch=branch, commit=commit))
                 current_wt = {}
@@ -103,6 +109,11 @@ def get_worktrees(bare_repo: Path) -> list[Worktree]:
         path = Path(current_wt.get("worktree", ""))
         branch = current_wt.get("branch", "").replace("refs/heads/", "")
         commit = current_wt.get("HEAD", "")[:8]
+
+        # Mark detached HEAD state
+        if not branch and commit:
+            branch = f"(detached {commit})"
+
         if path.exists():
             worktrees.append(Worktree(path=path, branch=branch, commit=commit))
 
@@ -287,7 +298,12 @@ def cmd_list(bare_repo: Path) -> int:
 
     max_branch_len = max(len(wt.branch) for wt in worktrees)
     for wt in worktrees:
-        print(f"  {wt.branch:<{max_branch_len}}  {wt.commit}  {wt.path}")
+        # Highlight detached HEAD state in yellow
+        if wt.branch.startswith("(detached"):
+            branch_display = colorize(wt.branch.ljust(max_branch_len), Color.YELLOW)
+        else:
+            branch_display = wt.branch.ljust(max_branch_len)
+        print(f"  {branch_display}  {wt.commit}  {wt.path}")
 
     return 0
 
@@ -295,6 +311,12 @@ def cmd_list(bare_repo: Path) -> int:
 def has_remote_branch(bare_repo: Path, branch: str) -> bool:
     """Check if remote branch exists."""
     result = run_git(["branch", "-r", "--list", f"origin/{branch}"], cwd=bare_repo)
+    return bool(result.stdout.strip())
+
+
+def has_local_branch(bare_repo: Path, branch: str) -> bool:
+    """Check if local branch exists."""
+    result = run_git(["branch", "--list", branch], cwd=bare_repo)
     return bool(result.stdout.strip())
 
 
@@ -590,10 +612,20 @@ def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool, base: 
             )
     else:
         # Checkout existing branch
-        result = run_git(
-            ["worktree", "add", str(wt_path), branch],
-            cwd=bare_repo,
-        )
+        local_exists = has_local_branch(bare_repo, branch)
+
+        if remote_exists and not local_exists:
+            # Remote exists but local doesn't - create tracking branch
+            result = run_git(
+                ["worktree", "add", "--track", "-b", branch, str(wt_path), f"origin/{branch}"],
+                cwd=bare_repo,
+            )
+        else:
+            # Checkout existing local branch
+            result = run_git(
+                ["worktree", "add", str(wt_path), branch],
+                cwd=bare_repo,
+            )
 
     if result.returncode != 0:
         print(f"{Color.RED}FAIL{Color.RESET} {result.stderr.strip()}")
@@ -618,25 +650,39 @@ def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool, base: 
     return 0
 
 
-def cmd_remove(bare_repo: Path, branch: str, force: bool) -> int:
-    """Remove a worktree."""
+def cmd_remove(bare_repo: Path, identifier: str, force: bool) -> int:
+    """Remove a worktree by branch name or path."""
     worktrees = get_worktrees(bare_repo)
 
-    # Find worktree by branch name
+    # Resolve identifier to path if it looks like a path
+    identifier_path = None
+    if "/" in identifier or identifier.startswith("."):
+        identifier_path = Path(identifier).resolve()
+
+    # Find worktree by branch name or path
     target_wt = None
     for wt in worktrees:
-        if wt.branch == branch:
+        # Match by branch name
+        if wt.branch == identifier:
+            target_wt = wt
+            break
+        # Match by exact path
+        if identifier_path and wt.path == identifier_path:
+            target_wt = wt
+            break
+        # Match by directory name or path suffix
+        if wt.path.name == identifier or str(wt.path).endswith(identifier):
             target_wt = wt
             break
 
     if target_wt is None:
-        print(f"{Color.RED}Error:{Color.RESET} No worktree found for branch '{branch}'")
+        print(f"{Color.RED}Error:{Color.RESET} No worktree found for '{identifier}'")
         print("\nAvailable worktrees:")
         for wt in worktrees:
-            print(f"  {wt.branch}")
+            print(f"  {wt.branch:<30}  {wt.path}")
         return 1
 
-    print(f"Removing worktree: {branch}")
+    print(f"Removing worktree: {target_wt.branch}")
     print(f"  Path: {target_wt.path}")
     print()
 
@@ -661,6 +707,33 @@ def cmd_remove(bare_repo: Path, branch: str, force: bool) -> int:
     return 0
 
 
+# Argument completers for shell tab-completion
+def _worktree_branch_completer(prefix: str, **kwargs) -> list[str]:
+    """Complete branch names from existing worktrees."""
+    bare_repo = find_bare_repo()
+    if bare_repo is None:
+        return []
+    worktrees = get_worktrees(bare_repo)
+    return [wt.branch for wt in worktrees if wt.branch.startswith(prefix)]
+
+
+def _remote_branch_completer(prefix: str, **kwargs) -> list[str]:
+    """Complete branch names from remote."""
+    bare_repo = find_bare_repo()
+    if bare_repo is None:
+        return []
+    result = run_git(["branch", "-r", "--format=%(refname:short)"], cwd=bare_repo)
+    if result.returncode != 0:
+        return []
+    branches = []
+    for line in result.stdout.strip().split("\n"):
+        if line.startswith("origin/"):
+            branch = line[7:]  # Remove "origin/" prefix
+            if branch != "HEAD" and branch.startswith(prefix):
+                branches.append(branch)
+    return branches
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="wt",
@@ -683,7 +756,7 @@ def main() -> int:
 
     # add command
     add_parser = subparsers.add_parser("add", aliases=["a"], help="Add a new worktree")
-    add_parser.add_argument("branch", help="Branch name")
+    add_parser.add_argument("branch", help="Branch name").completer = _remote_branch_completer
     add_parser.add_argument("path", nargs="?", help="Worktree path (default: ../<branch>)")
     add_parser.add_argument(
         "-c",
@@ -695,11 +768,13 @@ def main() -> int:
         "-b",
         "--base",
         help="Base branch to create new branch from (requires -c)",
-    )
+    ).completer = _remote_branch_completer
 
     # remove command
     rm_parser = subparsers.add_parser("remove", aliases=["rm"], help="Remove a worktree")
-    rm_parser.add_argument("branch", help="Branch name of the worktree to remove")
+    rm_parser.add_argument(
+        "identifier", help="Branch name or path of the worktree to remove"
+    ).completer = _worktree_branch_completer
     rm_parser.add_argument(
         "-f",
         "--force",
@@ -723,6 +798,9 @@ def main() -> int:
     subparsers.add_parser(
         "upstream", aliases=["up"], help="Set upstream to origin/<branch> for all worktrees"
     )
+
+    # Enable shell tab-completion
+    argcomplete.autocomplete(parser)
 
     args = parser.parse_args()
 
@@ -764,7 +842,7 @@ def main() -> int:
     elif args.command in ("add", "a"):
         return cmd_add(bare_repo, args.branch, args.path, args.create, args.base)
     elif args.command in ("remove", "rm"):
-        return cmd_remove(bare_repo, args.branch, args.force)
+        return cmd_remove(bare_repo, args.identifier, args.force)
 
     return 0
 
