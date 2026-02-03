@@ -71,6 +71,19 @@ wt remove staging
 wt remove staging -f
 ```
 
+### 새 원격 브랜치를 worktree로 추가
+
+```bash
+# 1) 원격 최신화
+wt fetch
+
+# 2) 원격 브랜치를 worktree로 추가
+wt add feature/new-remote
+
+# 3) upstream이 없으면(선택)
+wt upstream
+```
+
 ### 상태 확인 (wt status)
 
 ```bash
