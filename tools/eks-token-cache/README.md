@@ -154,6 +154,43 @@ rm ~/.kube/cache/eks-tokens/my-cluster_*.json
 kubectl get nodes
 ```
 
+### AWS 세션 변경 후 Unauthorized
+
+캐시는 **토큰 만료 시간만** 체크하므로, AWS 세션이 변경되어도 이전 토큰이 사용될 수 있습니다.
+
+**증상**: `aws login` 후에도 EKS 접근 시 Unauthorized 에러 발생
+
+**원인**: 이전 세션에서 발급된 토큰이 캐시에 남아있음
+
+**해결**: `aws login` 후 자동으로 캐시를 삭제하는 shell hook 추가
+
+```bash
+# ~/.zsh_functions 또는 ~/.bashrc에 추가
+
+# aws wrapper - login 후 EKS 토큰 캐시 자동 삭제
+aws() {
+  local EKS_TOKEN_CACHE_DIR="${HOME}/.kube/cache/eks-tokens"
+
+  command aws "$@"
+  local exit_code=$?
+
+  # login 성공 시 캐시 삭제
+  if (( exit_code == 0 )) && [[ "$1" == "login" ]]; then
+    if [[ -d "$EKS_TOKEN_CACHE_DIR" ]]; then
+      local count=$(find "$EKS_TOKEN_CACHE_DIR" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
+      if (( count > 0 )); then
+        rm -f "${EKS_TOKEN_CACHE_DIR}"/*.json 2>/dev/null
+        echo "[aws-login-hook] EKS 토큰 캐시 삭제됨 (${count}개)" >&2
+      fi
+    fi
+  fi
+
+  return $exit_code
+}
+```
+
+적용 후 새 shell을 열거나 `source ~/.zsh_functions` 실행
+
 ### AWS 인증 에러
 
 ```bash
