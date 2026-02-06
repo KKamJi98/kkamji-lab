@@ -31,7 +31,7 @@ chmod +x ~/.kube/eks-token-cache*.sh
 ### 의존성
 
 - `jq`: JSON 파싱 (토큰 캐시 스크립트)
-- `yq`: YAML 편집 (manager 스크립트의 apply/revert 기능)
+- `yq`: YAML 편집 (manager 스크립트의 apply/revert 기능, dry-run 제외)
 - `aws-cli`: EKS 토큰 발급
 - `kubectl`: kubeconfig 읽기/수정
 
@@ -53,6 +53,10 @@ brew install jq awscli yq
 
 # 일괄 적용: 모든 미적용 context에 적용
 ~/.kube/eks-token-cache-manager.sh apply-all
+
+# 사전 점검: 실제 변경 없이 적용 예정 내용 확인
+~/.kube/eks-token-cache-manager.sh apply --dry-run
+~/.kube/eks-token-cache-manager.sh --dry-run apply-all
 
 # 해제: 원본 aws eks get-token으로 복원
 ~/.kube/eks-token-cache-manager.sh revert
@@ -219,11 +223,32 @@ kubectl config view --minify -o jsonpath='{.users[0].user.exec}'
 
 ## 성능 비교
 
+### kubectl (EKS 토큰 캐시)
+
 | 시나리오 | 캐시 없음 | 캐시 있음 |
 |----------|-----------|-----------|
 | 첫 실행 | ~1.5초 | ~1.5초 |
 | 반복 실행 | ~1.5초 | ~0.1초 |
 | 10회 연속 | ~15초 | ~1.6초 |
+
+### kubectx/kubens (완전 자체 구현)
+
+`~/.zsh_functions`의 shell 함수가 kubectx/kubens 바이너리를 완전 대체합니다. 원본 설치 불필요.
+
+| 시나리오 | 원본 kubectx/kubens | 자체 구현 |
+|----------|---------------------|-----------|
+| `kubectx <name>` | ~200-500ms | ~50ms |
+| `kubectx -` (이전 context) | ~200-500ms | ~50ms |
+| `kubectx` (fzf, 캐시 hit) | ~250-350ms | ~100ms |
+| `kubens <name>` | ~500-2500ms | ~100ms |
+| `kubens -` (이전 ns) | ~500-2500ms | ~100ms |
+| `kubens` (fzf, 캐시 hit) | ~250-350ms | ~100ms |
+
+**원리:**
+- kubectx/kubens 바이너리 의존성 제거 — `kubectl config` 명령을 직접 실행
+- kubens의 `kubectl get namespaces` API 호출을 TTL 캐시로 대체
+- 이전 context/namespace를 파일에 저장하여 `-` 전환도 서브프로세스 없이 처리
+- 의존성: `kubectl`, `fzf`만 필요 (`brew install kubectx` 불필요)
 
 ## 라이선스
 

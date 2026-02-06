@@ -1,6 +1,6 @@
 #!/bin/bash
 # EKS 토큰 캐시 관리 스크립트
-# 사용법: eks-token-cache-manager.sh [status|apply|apply-all]
+# 사용법: eks-token-cache-manager.sh [--dry-run] [status|apply|apply-all|revert]
 
 set -euo pipefail
 
@@ -14,6 +14,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+JQ_BUILD_NEW_ARGS_FILTER="[ \$c, \$r ] + (if (\$p | length) > 0 then [\$p] else [] end)"
+DRY_RUN=0
+ACTION=""
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -27,8 +30,23 @@ require_cmds_for_action() {
     require_cmd kubectl
     require_cmd jq
     case "$action" in
-        apply|apply-all|revert) require_cmd yq ;;
+        apply|apply-all)
+            if [[ "$DRY_RUN" -eq 0 ]]; then
+                require_cmd yq
+            fi
+            validate_jq_filters
+            ;;
+        revert)
+            require_cmd yq
+            ;;
     esac
+}
+
+validate_jq_filters() {
+    if ! jq -c -n --arg c "cluster" --arg r "region" --arg p "profile" "$JQ_BUILD_NEW_ARGS_FILTER" >/dev/null 2>&1; then
+        echo -e "${RED}Error: 내부 jq 필터 검증에 실패했습니다. 스크립트의 jq 구문을 확인하세요.${NC}" >&2
+        exit 1
+    fi
 }
 
 usage() {
@@ -36,12 +54,44 @@ usage() {
 EKS 토큰 캐시 관리자
 
 사용법:
-  $(basename "$0") status      모든 EKS context 상태 확인
-  $(basename "$0") apply       미적용 context 선택 적용
-  $(basename "$0") apply-all   미적용 context 일괄 적용
-  $(basename "$0") revert      캐시 스크립트 적용 해제 (원본 aws eks get-token 복원)
+  $(basename "$0") [--dry-run|-n] status
+  $(basename "$0") [--dry-run|-n] apply
+  $(basename "$0") [--dry-run|-n] apply-all
+  $(basename "$0") revert
+
+옵션:
+  -n, --dry-run  kubeconfig 변경 없이 적용 예정 내용만 출력 (apply/apply-all 전용)
 
 EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -n|--dry-run) DRY_RUN=1 ;;
+            -h|--help|help) ACTION="help" ;;
+            status|apply|apply-all|revert)
+                if [[ -n "$ACTION" && "$ACTION" != "help" ]]; then
+                    echo -e "${RED}Error: action은 하나만 지정할 수 있습니다.${NC}" >&2
+                    usage
+                    exit 1
+                fi
+                ACTION="$1"
+                ;;
+            *)
+                echo -e "${RED}Error: 알 수 없는 인자: $1${NC}" >&2
+                usage
+                exit 1
+                ;;
+        esac
+        shift
+    done
+
+    [[ -z "$ACTION" ]] && ACTION="status"
+
+    if [[ "$DRY_RUN" -eq 1 && "$ACTION" != "apply" && "$ACTION" != "apply-all" && "$ACTION" != "help" ]]; then
+        echo -e "${YELLOW}Warning: --dry-run은 apply/apply-all에서만 의미가 있습니다.${NC}" >&2
+    fi
 }
 
 # kubeconfig를 JSON으로 (캐시하여 재사용, --raw로 exec 트리거 방지)
@@ -243,11 +293,17 @@ apply_to_context() {
 
     local args_json
     args_json=$(echo "$exec_json" | jq -c '.args // []')
+    local exec_cmd
+    exec_cmd=$(echo "$exec_json" | jq -r '.command // empty')
+    local uses_cache_positional=0
+    if [[ "$exec_cmd" == "$CACHE_SCRIPT" || "$exec_cmd" == "$(basename "$CACHE_SCRIPT")" ]]; then
+        uses_cache_positional=1
+    fi
 
     # cluster_name: --cluster-name 플래그 값 또는 ARN에서 추출
     local cluster_name
     cluster_name=$(get_arg_value "$args_json" "--cluster-name")
-    if [[ -z "$cluster_name" ]]; then
+    if [[ -z "$cluster_name" && "$uses_cache_positional" -eq 1 ]]; then
         cluster_name=$(get_positional_arg "$args_json" 0)
     fi
 
@@ -261,7 +317,7 @@ apply_to_context() {
     # region: --region 플래그 값
     local region
     region=$(get_arg_value "$args_json" "--region")
-    if [[ -z "$region" ]]; then
+    if [[ -z "$region" && "$uses_cache_positional" -eq 1 ]]; then
         region=$(get_positional_arg "$args_json" 1)
     fi
     region="${region:-ap-northeast-2}"
@@ -269,7 +325,7 @@ apply_to_context() {
     # profile: --profile 플래그 값 또는 env의 AWS_PROFILE
     local profile
     profile=$(get_arg_value "$args_json" "--profile")
-    if [[ -z "$profile" ]]; then
+    if [[ -z "$profile" && "$uses_cache_positional" -eq 1 ]]; then
         profile=$(get_positional_arg "$args_json" 2)
     fi
     if [[ -z "$profile" ]]; then
@@ -281,7 +337,11 @@ apply_to_context() {
         return 1
     fi
 
-    echo -e "적용 중: ${BLUE}$ctx${NC}"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo -e "점검 중(DRY-RUN): ${BLUE}$ctx${NC}"
+    else
+        echo -e "적용 중: ${BLUE}$ctx${NC}"
+    fi
     echo "  cluster: $cluster_name, region: $region, profile: ${profile:-default}"
 
     # 해당 user가 있는 kubeconfig 파일 찾기
@@ -296,12 +356,26 @@ apply_to_context() {
         return 1
     fi
 
-    write_backup "$user" "$target_cfg" "$exec_json"
-
     # yq로 직접 수정 (kubectl의 상대경로 변환 문제 회피)
     local new_args_json
-    new_args_json=$(jq -c -n --arg c "$cluster_name" --arg r "$region" --arg p "$profile" \
-        '[ $c, $r ] + ( $p | length > 0 ? [$p] : [] )')
+    if ! new_args_json=$(jq -c -n --arg c "$cluster_name" --arg r "$region" --arg p "$profile" \
+        "$JQ_BUILD_NEW_ARGS_FILTER"); then
+        echo -e "${RED}Error: $ctx 의 exec args 생성에 실패했습니다 (jq 필터 구문 확인 필요)${NC}"
+        return 1
+    fi
+
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        local new_args_preview
+        new_args_preview=$(echo "$new_args_json" | jq -r 'join(" ")')
+        echo "  kubeconfig: $target_cfg"
+        echo "  user: $user"
+        echo "  exec command: $CACHE_SCRIPT"
+        echo "  exec args: $new_args_preview"
+        echo -e "  ${YELLOW}DRY-RUN: 실제 파일 변경 없음${NC}"
+        return 0
+    fi
+
+    write_backup "$user" "$target_cfg" "$exec_json"
 
     USER_NAME="$user" CACHE_SCRIPT="$CACHE_SCRIPT" EXEC_JSON="$exec_json" NEW_ARGS_JSON="$new_args_json" \
         yq e -i '
@@ -367,7 +441,11 @@ cmd_apply() {
     esac
 
     echo ""
-    echo -e "${GREEN}적용 완료!${NC} 'EKS_TOKEN_DEBUG=1 kubectl get nodes'로 확인하세요."
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo -e "${YELLOW}DRY-RUN 완료: 실제 변경은 수행하지 않았습니다.${NC}"
+    else
+        echo -e "${GREEN}적용 완료!${NC} 'EKS_TOKEN_DEBUG=1 kubectl get nodes'로 확인하세요."
+    fi
 }
 
 # 전체 적용
@@ -386,10 +464,18 @@ cmd_apply_all() {
     done <<< "$contexts"
 
     if [[ $count -eq 0 ]]; then
-        echo -e "${GREEN}모든 EKS context에 이미 캐시가 적용되어 있습니다.${NC}"
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            echo -e "${GREEN}모든 EKS context에 이미 캐시가 적용되어 있습니다 (DRY-RUN).${NC}"
+        else
+            echo -e "${GREEN}모든 EKS context에 이미 캐시가 적용되어 있습니다.${NC}"
+        fi
     else
         echo ""
-        echo -e "${GREEN}${count}개 context에 적용 완료!${NC}"
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            echo -e "${YELLOW}${count}개 context 점검 완료 (DRY-RUN, 실제 변경 없음)!${NC}"
+        else
+            echo -e "${GREEN}${count}개 context에 적용 완료!${NC}"
+        fi
     fi
 }
 
@@ -460,10 +546,16 @@ cmd_revert() {
 
             local args_json
             args_json=$(get_user_exec_args_json "$user")
+            local exec_cmd
+            exec_cmd=$(get_user_exec_command "$user")
+            local uses_cache_positional=0
+            if [[ "$exec_cmd" == "$CACHE_SCRIPT" || "$exec_cmd" == "$(basename "$CACHE_SCRIPT")" ]]; then
+                uses_cache_positional=1
+            fi
 
             local cluster_name region profile
             cluster_name=$(get_arg_value "$args_json" "--cluster-name")
-            [[ -z "$cluster_name" ]] && cluster_name=$(get_positional_arg "$args_json" 0)
+            [[ -z "$cluster_name" && "$uses_cache_positional" -eq 1 ]] && cluster_name=$(get_positional_arg "$args_json" 0)
 
             if [[ -z "$cluster_name" ]]; then
                 cluster_name=$(get_kubeconfig_json | jq -r --arg ctx "$ctx" '
@@ -472,11 +564,11 @@ cmd_revert() {
             fi
 
             region=$(get_arg_value "$args_json" "--region")
-            [[ -z "$region" ]] && region=$(get_positional_arg "$args_json" 1)
+            [[ -z "$region" && "$uses_cache_positional" -eq 1 ]] && region=$(get_positional_arg "$args_json" 1)
             region="${region:-ap-northeast-2}"
 
             profile=$(get_arg_value "$args_json" "--profile")
-            [[ -z "$profile" ]] && profile=$(get_positional_arg "$args_json" 2)
+            [[ -z "$profile" && "$uses_cache_positional" -eq 1 ]] && profile=$(get_positional_arg "$args_json" 2)
             [[ -z "$profile" ]] && profile=$(get_user_aws_profile_env "$user")
 
             local target_cfg
@@ -526,11 +618,13 @@ cmd_revert() {
 }
 
 # 메인
-case "${1:-status}" in
+parse_args "$@"
+
+case "$ACTION" in
     status) require_cmds_for_action status; cmd_status ;;
     apply) require_cmds_for_action apply; cmd_apply ;;
     apply-all) require_cmds_for_action apply-all; cmd_apply_all ;;
     revert) require_cmds_for_action revert; cmd_revert ;;
-    -h|--help|help) usage ;;
+    help) usage ;;
     *) usage; exit 1 ;;
 esac
