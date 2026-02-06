@@ -92,25 +92,30 @@ users:
 
 ## 캐시 동작 원리
 
-### v1 (기존 방식) - 파일 mtime 기반
-```
-캐시 유효성 = (현재시간 - 파일수정시간) < 10분
-문제: 파일 touch/복사 시 만료된 토큰 사용 가능
-```
+토큰 내부 `expirationTimestamp` 기반으로 캐시 유효성을 판단합니다 (이전 v1에서는 파일 mtime 기반이었으나, 현재는 실제 토큰 만료 시간 기준으로 정확한 판단).
 
-### v2 (현재 방식) - 토큰 만료시간 기반
 ```
 캐시 유효성 = 토큰.expirationTimestamp > (현재시간 + 60초)
-장점: 실제 토큰 만료 시간 기준으로 정확한 판단
 ```
+
+### AWS 세션 변경 자동 감지 (credential fingerprint)
+
+AWS 세션이 변경되면(re-login 등) 이전 세션의 토큰이 캐시에 남아 Unauthorized 에러가 발생할 수 있습니다. 이를 방지하기 위해 credential fingerprint 메커니즘을 사용합니다:
+
+1. **토큰 저장 시**: AWS 자격증명 파일(`~/.aws/cli/cache/session.db`, `~/.aws/login/cache/*.json`)의 mtime을 조합한 fingerprint를 `.meta` 사이드카 파일에 저장
+2. **캐시 읽기 시**: 현재 fingerprint와 저장된 fingerprint를 비교하여 불일치 시 캐시 무효화
+3. **하위 호환성**: `.meta` 파일이 없는 기존 캐시도 정상 동작 (fingerprint 검증 스킵)
+
+성능 영향: 캐시 hit 경로에 `stat` 호출 2~3회 추가 (~1ms), 무시 가능 수준.
 
 ### 캐시 파일 위치
 
 ```
 ~/.kube/cache/eks-tokens/
-├── staging-32_ap-northeast-2_company.json    # cluster_region_profile 형식
+├── staging-32_ap-northeast-2_company.json       # 토큰 (cluster_region_profile)
+├── staging-32_ap-northeast-2_company.json.meta  # credential fingerprint
 ├── prod-32_ap-northeast-2_company.json
-└── my-cluster_ap-northeast-2.json            # profile 없는 경우
+└── my-cluster_ap-northeast-2.json               # profile 없는 경우
 ```
 
 ### 원본 exec 백업 (자동)
@@ -123,7 +128,7 @@ users:
 ```
 
 > 백업에는 `kubeconfig` 파일 경로와 `user.exec` 전체가 저장됩니다.
-> 백업이 없으면 현재 설정을 기준으로 복원하며, 추가 옵션은 복원되지 않을 수 있습니다.
+> 백업이 없으면 사용자 확인 후 현재 설정을 기준으로 복원하며, 추가 옵션은 복원되지 않을 수 있습니다.
 
 ## 설정
 
@@ -132,6 +137,8 @@ users:
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
 | `EKS_TOKEN_DEBUG` | 디버그 로그 출력 | `0` (비활성) |
+| `EKS_TOKEN_CACHE_SCRIPT` | 캐시 스크립트 경로 (manager용) | `~/.kube/eks-token-cache.sh` |
+| `EKS_TOKEN_CACHE_DIR` | 토큰 캐시 디렉토리 (aws hook용) | `~/.kube/cache/eks-tokens` |
 
 ### 스크립트 상수
 
@@ -160,13 +167,11 @@ kubectl get nodes
 
 ### AWS 세션 변경 후 Unauthorized
 
-캐시는 **토큰 만료 시간만** 체크하므로, AWS 세션이 변경되어도 이전 토큰이 사용될 수 있습니다.
+캐시는 credential fingerprint로 세션 변경을 자동 감지하지만, shell hook도 함께 사용하면 더 확실합니다.
 
-**증상**: `aws login` 후에도 EKS 접근 시 Unauthorized 에러 발생
+**자동 감지 (v2)**: `eks-token-cache.sh`가 `.meta` 파일의 fingerprint를 비교하여 세션 변경 시 자동으로 캐시를 무효화합니다.
 
-**원인**: 이전 세션에서 발급된 토큰이 캐시에 남아있음
-
-**해결**: `aws login` 후 자동으로 캐시를 삭제하는 shell hook 추가
+**shell hook (보조)**: `aws login` 또는 `aws sso login` 성공 시 캐시를 즉시 삭제합니다.
 
 ```bash
 # ~/.zsh_functions 또는 ~/.bashrc에 추가
@@ -178,13 +183,15 @@ aws() {
   command aws "$@"
   local exit_code=$?
 
-  # login 성공 시 캐시 삭제
-  if (( exit_code == 0 )) && [[ "$1" == "login" ]]; then
-    if [[ -d "$EKS_TOKEN_CACHE_DIR" ]]; then
-      local count=$(find "$EKS_TOKEN_CACHE_DIR" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
-      if (( count > 0 )); then
-        rm -f "${EKS_TOKEN_CACHE_DIR}"/*.json 2>/dev/null
-        echo "[aws-login-hook] EKS 토큰 캐시 삭제됨 (${count}개)" >&2
+  # login 성공 시 캐시 삭제 (aws login, aws sso login 모두 감지)
+  if (( exit_code == 0 )); then
+    if [[ "$1" == "login" ]] || [[ "$1" == "sso" && "$2" == "login" ]]; then
+      if [[ -d "$EKS_TOKEN_CACHE_DIR" ]]; then
+        local count=$(find "$EKS_TOKEN_CACHE_DIR" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
+        if (( count > 0 )); then
+          rm -f "${EKS_TOKEN_CACHE_DIR}"/*.json "${EKS_TOKEN_CACHE_DIR}"/*.meta 2>/dev/null
+          echo "[aws-login-hook] EKS 토큰 캐시 삭제됨 (${count}개)" >&2
+        fi
       fi
     fi
   fi
@@ -223,32 +230,11 @@ kubectl config view --minify -o jsonpath='{.users[0].user.exec}'
 
 ## 성능 비교
 
-### kubectl (EKS 토큰 캐시)
-
 | 시나리오 | 캐시 없음 | 캐시 있음 |
 |----------|-----------|-----------|
 | 첫 실행 | ~1.5초 | ~1.5초 |
 | 반복 실행 | ~1.5초 | ~0.1초 |
 | 10회 연속 | ~15초 | ~1.6초 |
-
-### kubectx/kubens (완전 자체 구현)
-
-`~/.zsh_functions`의 shell 함수가 kubectx/kubens 바이너리를 완전 대체합니다. 원본 설치 불필요.
-
-| 시나리오 | 원본 kubectx/kubens | 자체 구현 |
-|----------|---------------------|-----------|
-| `kubectx <name>` | ~200-500ms | ~50ms |
-| `kubectx -` (이전 context) | ~200-500ms | ~50ms |
-| `kubectx` (fzf, 캐시 hit) | ~250-350ms | ~100ms |
-| `kubens <name>` | ~500-2500ms | ~100ms |
-| `kubens -` (이전 ns) | ~500-2500ms | ~100ms |
-| `kubens` (fzf, 캐시 hit) | ~250-350ms | ~100ms |
-
-**원리:**
-- kubectx/kubens 바이너리 의존성 제거 — `kubectl config` 명령을 직접 실행
-- kubens의 `kubectl get namespaces` API 호출을 TTL 캐시로 대체
-- 이전 context/namespace를 파일에 저장하여 `-` 전환도 서브프로세스 없이 처리
-- 의존성: `kubectl`, `fzf`만 필요 (`brew install kubectx` 불필요)
 
 ## 라이선스
 

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # 절대 경로 사용 (kubectl이 상대경로로 저장하는 문제 방지)
-CACHE_SCRIPT="${HOME}/.kube/eks-token-cache.sh"
+CACHE_SCRIPT="${EKS_TOKEN_CACHE_SCRIPT:-${HOME}/.kube/eks-token-cache.sh}"
 CACHE_STATE_DIR="${HOME}/.kube/cache/eks-token-cache"
 BACKUP_DIR="${CACHE_STATE_DIR}/backups"
 
@@ -162,49 +162,6 @@ is_cache_enabled() {
     [[ "$cmd" == "$CACHE_SCRIPT" || "$cmd" == "$(basename "$CACHE_SCRIPT")" ]]
 }
 
-# 상태 출력
-cmd_status() {
-    echo -e "${BLUE}=== EKS Context 상태 ===${NC}\n"
-
-    local contexts
-    contexts=$(get_eks_contexts)
-
-    if [[ -z "$contexts" ]]; then
-        echo "EKS context를 찾을 수 없습니다."
-        return
-    fi
-
-    local applied=0
-    local not_applied=0
-
-    printf "%-40s %-15s %s\n" "CONTEXT" "STATUS" "CLUSTER/PROFILE"
-    printf "%-40s %-15s %s\n" "-------" "------" "---------------"
-
-    while IFS= read -r ctx; do
-        local user
-        user=$(get_context_user "$ctx")
-
-        local exec_cmd
-        exec_cmd=$(get_user_exec_command "$user")
-
-        local exec_args
-        exec_args=$(get_user_exec_args "$user")
-
-        if [[ "$exec_cmd" == "$CACHE_SCRIPT" || "$exec_cmd" == "$(basename "$CACHE_SCRIPT")" ]]; then
-            printf "%-40s ${GREEN}%-15s${NC} %s\n" "$ctx" "캐시 적용됨" "$exec_args"
-            ((applied++)) || true
-        elif [[ "$exec_cmd" == "aws" ]] || [[ -z "$exec_cmd" ]]; then
-            printf "%-40s ${YELLOW}%-15s${NC} %s\n" "$ctx" "미적용" "$exec_args"
-            ((not_applied++)) || true
-        else
-            printf "%-40s ${RED}%-15s${NC} %s\n" "$ctx" "기타" "$exec_cmd"
-        fi
-    done <<< "$contexts"
-
-    echo ""
-    echo -e "적용: ${GREEN}${applied}${NC}, 미적용: ${YELLOW}${not_applied}${NC}"
-}
-
 # args 배열에서 특정 플래그 다음 값 추출
 get_arg_value() {
     local args_json="$1"
@@ -237,9 +194,52 @@ get_user_aws_profile_env() {
     '
 }
 
+# context에서 EKS 파라미터(cluster_name, region, profile) 추출
+# 결과: _cluster_name, _region, _profile 변수 설정
+extract_eks_params() {
+    local ctx="$1"
+    local user="$2"
+
+    local args_json exec_cmd uses_cache_positional=0
+    args_json=$(get_user_exec_args_json "$user")
+    exec_cmd=$(get_user_exec_command "$user")
+    if [[ "$exec_cmd" == "$CACHE_SCRIPT" || "$exec_cmd" == "$(basename "$CACHE_SCRIPT")" ]]; then
+        uses_cache_positional=1
+    fi
+
+    # cluster_name: --cluster-name 플래그 값 또는 ARN에서 추출
+    _cluster_name=$(get_arg_value "$args_json" "--cluster-name")
+    if [[ -z "$_cluster_name" && "$uses_cache_positional" -eq 1 ]]; then
+        _cluster_name=$(get_positional_arg "$args_json" 0)
+    fi
+    if [[ -z "$_cluster_name" ]]; then
+        _cluster_name=$(get_kubeconfig_json | jq -r --arg ctx "$ctx" '
+            .contexts[] | select(.name == $ctx) | .context.cluster
+        ' | sed 's|.*/||')
+    fi
+
+    # region: --region 플래그 값
+    _region=$(get_arg_value "$args_json" "--region")
+    if [[ -z "$_region" && "$uses_cache_positional" -eq 1 ]]; then
+        _region=$(get_positional_arg "$args_json" 1)
+    fi
+    _region="${_region:-ap-northeast-2}"
+
+    # profile: --profile 플래그 값 또는 env의 AWS_PROFILE
+    _profile=$(get_arg_value "$args_json" "--profile")
+    if [[ -z "$_profile" && "$uses_cache_positional" -eq 1 ]]; then
+        _profile=$(get_positional_arg "$args_json" 2)
+    fi
+    if [[ -z "$_profile" ]]; then
+        _profile=$(get_user_aws_profile_env "$user")
+    fi
+}
+
 ensure_state_dirs() {
     mkdir -p "$BACKUP_DIR"
-    chmod 700 "$CACHE_STATE_DIR" "$BACKUP_DIR" 2>/dev/null || true
+    chmod 700 "$CACHE_STATE_DIR" "$BACKUP_DIR" 2>/dev/null || {
+        echo "Warning: Failed to set permissions on state directories" >&2
+    }
 }
 
 sanitize_id() {
@@ -261,7 +261,9 @@ write_backup() {
     backup_file=$(backup_file_for_user "$user")
 
     printf '%s' "$exec_json" | jq -c --arg cfg "$target_cfg" '{kubeconfig: $cfg, exec: .}' > "$backup_file"
-    chmod 600 "$backup_file" 2>/dev/null || true
+    chmod 600 "$backup_file" 2>/dev/null || {
+        echo "Warning: Failed to set permissions on $backup_file" >&2
+    }
 }
 
 # user가 속한 kubeconfig 파일 찾기
@@ -279,6 +281,57 @@ find_kubeconfig_for_user() {
     echo "$found"
 }
 
+# 상태 출력 (동적 폭 계산)
+cmd_status() {
+    echo -e "${BLUE}=== EKS Context 상태 ===${NC}\n"
+
+    local contexts
+    contexts=$(get_eks_contexts)
+
+    if [[ -z "$contexts" ]]; then
+        echo "EKS context를 찾을 수 없습니다."
+        return
+    fi
+
+    # 동적 폭 계산: context 이름 최대 길이 + 여유 2칸
+    local max_ctx_len=7  # "CONTEXT" 헤더 길이
+    while IFS= read -r ctx; do
+        local len=${#ctx}
+        [[ $len -gt $max_ctx_len ]] && max_ctx_len=$len
+    done <<< "$contexts"
+    local col_width=$((max_ctx_len + 2))
+
+    local applied=0
+    local not_applied=0
+
+    printf "%-${col_width}s %-15s %s\n" "CONTEXT" "STATUS" "CLUSTER/PROFILE"
+    printf "%-${col_width}s %-15s %s\n" "-------" "------" "---------------"
+
+    while IFS= read -r ctx; do
+        local user
+        user=$(get_context_user "$ctx")
+
+        local exec_cmd
+        exec_cmd=$(get_user_exec_command "$user")
+
+        local exec_args
+        exec_args=$(get_user_exec_args "$user")
+
+        if [[ "$exec_cmd" == "$CACHE_SCRIPT" || "$exec_cmd" == "$(basename "$CACHE_SCRIPT")" ]]; then
+            printf "%-${col_width}s ${GREEN}%-15s${NC} %s\n" "$ctx" "캐시 적용됨" "$exec_args"
+            ((applied++)) || true
+        elif [[ "$exec_cmd" == "aws" ]] || [[ -z "$exec_cmd" ]]; then
+            printf "%-${col_width}s ${YELLOW}%-15s${NC} %s\n" "$ctx" "미적용" "$exec_args"
+            ((not_applied++)) || true
+        else
+            printf "%-${col_width}s ${RED}%-15s${NC} %s\n" "$ctx" "기타" "$exec_cmd"
+        fi
+    done <<< "$contexts"
+
+    echo ""
+    echo -e "적용: ${GREEN}${applied}${NC}, 미적용: ${YELLOW}${not_applied}${NC}"
+}
+
 # 단일 context에 캐시 적용
 apply_to_context() {
     local ctx="$1"
@@ -291,48 +344,11 @@ apply_to_context() {
         .users[] | select(.name == $user) | .user.exec // {}
     ')
 
-    local args_json
-    args_json=$(echo "$exec_json" | jq -c '.args // []')
-    local exec_cmd
-    exec_cmd=$(echo "$exec_json" | jq -r '.command // empty')
-    local uses_cache_positional=0
-    if [[ "$exec_cmd" == "$CACHE_SCRIPT" || "$exec_cmd" == "$(basename "$CACHE_SCRIPT")" ]]; then
-        uses_cache_positional=1
-    fi
+    # 공통 파라미터 추출
+    local _cluster_name _region _profile
+    extract_eks_params "$ctx" "$user"
 
-    # cluster_name: --cluster-name 플래그 값 또는 ARN에서 추출
-    local cluster_name
-    cluster_name=$(get_arg_value "$args_json" "--cluster-name")
-    if [[ -z "$cluster_name" && "$uses_cache_positional" -eq 1 ]]; then
-        cluster_name=$(get_positional_arg "$args_json" 0)
-    fi
-
-    if [[ -z "$cluster_name" ]]; then
-        # EKS ARN에서 추출 (arn:aws:eks:region:account:cluster/name)
-        cluster_name=$(get_kubeconfig_json | jq -r --arg ctx "$ctx" '
-            .contexts[] | select(.name == $ctx) | .context.cluster
-        ' | sed 's|.*/||')
-    fi
-
-    # region: --region 플래그 값
-    local region
-    region=$(get_arg_value "$args_json" "--region")
-    if [[ -z "$region" && "$uses_cache_positional" -eq 1 ]]; then
-        region=$(get_positional_arg "$args_json" 1)
-    fi
-    region="${region:-ap-northeast-2}"
-
-    # profile: --profile 플래그 값 또는 env의 AWS_PROFILE
-    local profile
-    profile=$(get_arg_value "$args_json" "--profile")
-    if [[ -z "$profile" && "$uses_cache_positional" -eq 1 ]]; then
-        profile=$(get_positional_arg "$args_json" 2)
-    fi
-    if [[ -z "$profile" ]]; then
-        profile=$(get_user_aws_profile_env "$user")
-    fi
-
-    if [[ -z "$cluster_name" ]]; then
+    if [[ -z "$_cluster_name" ]]; then
         echo -e "${RED}Error: $ctx 의 cluster name을 찾을 수 없습니다${NC}"
         return 1
     fi
@@ -342,7 +358,7 @@ apply_to_context() {
     else
         echo -e "적용 중: ${BLUE}$ctx${NC}"
     fi
-    echo "  cluster: $cluster_name, region: $region, profile: ${profile:-default}"
+    echo "  cluster: $_cluster_name, region: $_region, profile: ${_profile:-default}"
 
     # 해당 user가 있는 kubeconfig 파일 찾기
     local target_cfg
@@ -358,7 +374,7 @@ apply_to_context() {
 
     # yq로 직접 수정 (kubectl의 상대경로 변환 문제 회피)
     local new_args_json
-    if ! new_args_json=$(jq -c -n --arg c "$cluster_name" --arg r "$region" --arg p "$profile" \
+    if ! new_args_json=$(jq -c -n --arg c "$_cluster_name" --arg r "$_region" --arg p "$_profile" \
         "$JQ_BUILD_NEW_ARGS_FILTER"); then
         echo -e "${RED}Error: $ctx 의 exec args 생성에 실패했습니다 (jq 필터 구문 확인 필요)${NC}"
         return 1
@@ -387,6 +403,77 @@ apply_to_context() {
                 .interactiveMode = (.interactiveMode // "IfAvailable")
             )
         ' "$target_cfg"
+
+    echo -e "  ${GREEN}완료${NC}"
+}
+
+# 단일 context에서 캐시 해제 (원본 복원)
+revert_context() {
+    local ctx="$1"
+    local user
+    user=$(get_context_user "$ctx")
+
+    echo -e "복원 중: ${BLUE}$ctx${NC}"
+
+    local backup_file
+    backup_file=$(backup_file_for_user "$user")
+
+    if [[ -f "$backup_file" ]]; then
+        local target_cfg exec_json
+        target_cfg=$(jq -r '.kubeconfig // empty' "$backup_file")
+        exec_json=$(jq -c '.exec' "$backup_file")
+
+        if [[ -z "$target_cfg" ]]; then
+            target_cfg=$(find_kubeconfig_for_user "$user")
+        fi
+
+        if [[ -z "$target_cfg" ]]; then
+            echo -e "${RED}Error: $ctx 의 kubeconfig 파일을 찾을 수 없습니다${NC}"
+            return 1
+        fi
+
+        if [[ -z "$exec_json" || "$exec_json" == "null" ]]; then
+            USER_NAME="$user" \
+                yq e -i 'del(.users[] | select(.name == strenv(USER_NAME)) | .user.exec)' "$target_cfg"
+        else
+            USER_NAME="$user" EXEC_JSON="$exec_json" \
+                yq e -i '(.users[] | select(.name == strenv(USER_NAME)) | .user.exec) = (strenv(EXEC_JSON) | from_json)' "$target_cfg"
+        fi
+    else
+        echo -e "${YELLOW}Warning: 백업이 없습니다. 현재 설정을 기반으로 aws eks get-token 형식으로 복원합니다.${NC}"
+        read -rp "계속하시겠습니까? (y/N): " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo "  건너뜀"
+            return 0
+        fi
+
+        # 공통 파라미터 추출
+        local _cluster_name _region _profile
+        extract_eks_params "$ctx" "$user"
+
+        local target_cfg
+        target_cfg=$(find_kubeconfig_for_user "$user")
+        if [[ -z "$target_cfg" ]]; then
+            echo -e "${RED}Error: $ctx 의 kubeconfig 파일을 찾을 수 없습니다${NC}"
+            return 1
+        fi
+
+        kubectl config set-credentials "$user" \
+            --kubeconfig "$target_cfg" \
+            --exec-api-version=client.authentication.k8s.io/v1beta1 \
+            --exec-command=aws \
+            --exec-arg=eks \
+            --exec-arg=get-token \
+            --exec-arg=--cluster-name \
+            --exec-arg="$_cluster_name" \
+            --exec-arg=--region \
+            --exec-arg="$_region" \
+            --exec-arg=--output \
+            --exec-arg=json \
+            ${_profile:+--exec-arg=--profile} \
+            ${_profile:+--exec-arg="$_profile"} \
+            >/dev/null
+    fi
 
     echo -e "  ${GREEN}완료${NC}"
 }
@@ -509,94 +596,6 @@ cmd_revert() {
     echo ""
 
     read -rp "선택 (번호/a/q): " choice
-
-    revert_context() {
-        local ctx="$1"
-        local user
-        user=$(get_context_user "$ctx")
-
-        echo -e "복원 중: ${BLUE}$ctx${NC}"
-
-        local backup_file
-        backup_file=$(backup_file_for_user "$user")
-
-        if [[ -f "$backup_file" ]]; then
-            local target_cfg exec_json
-            target_cfg=$(jq -r '.kubeconfig // empty' "$backup_file")
-            exec_json=$(jq -c '.exec' "$backup_file")
-
-            if [[ -z "$target_cfg" ]]; then
-                target_cfg=$(find_kubeconfig_for_user "$user")
-            fi
-
-            if [[ -z "$target_cfg" ]]; then
-                echo -e "${RED}Error: $ctx 의 kubeconfig 파일을 찾을 수 없습니다${NC}"
-                return 1
-            fi
-
-            if [[ -z "$exec_json" || "$exec_json" == "null" ]]; then
-                USER_NAME="$user" \
-                    yq e -i 'del(.users[] | select(.name == strenv(USER_NAME)) | .user.exec)' "$target_cfg"
-            else
-                USER_NAME="$user" EXEC_JSON="$exec_json" \
-                    yq e -i '(.users[] | select(.name == strenv(USER_NAME)) | .user.exec) = (strenv(EXEC_JSON) | from_json)' "$target_cfg"
-            fi
-        else
-            echo -e "${YELLOW}Warning: 백업이 없어 현재 설정으로 복원합니다.${NC}"
-
-            local args_json
-            args_json=$(get_user_exec_args_json "$user")
-            local exec_cmd
-            exec_cmd=$(get_user_exec_command "$user")
-            local uses_cache_positional=0
-            if [[ "$exec_cmd" == "$CACHE_SCRIPT" || "$exec_cmd" == "$(basename "$CACHE_SCRIPT")" ]]; then
-                uses_cache_positional=1
-            fi
-
-            local cluster_name region profile
-            cluster_name=$(get_arg_value "$args_json" "--cluster-name")
-            [[ -z "$cluster_name" && "$uses_cache_positional" -eq 1 ]] && cluster_name=$(get_positional_arg "$args_json" 0)
-
-            if [[ -z "$cluster_name" ]]; then
-                cluster_name=$(get_kubeconfig_json | jq -r --arg ctx "$ctx" '
-                    .contexts[] | select(.name == $ctx) | .context.cluster
-                ' | sed 's|.*/||')
-            fi
-
-            region=$(get_arg_value "$args_json" "--region")
-            [[ -z "$region" && "$uses_cache_positional" -eq 1 ]] && region=$(get_positional_arg "$args_json" 1)
-            region="${region:-ap-northeast-2}"
-
-            profile=$(get_arg_value "$args_json" "--profile")
-            [[ -z "$profile" && "$uses_cache_positional" -eq 1 ]] && profile=$(get_positional_arg "$args_json" 2)
-            [[ -z "$profile" ]] && profile=$(get_user_aws_profile_env "$user")
-
-            local target_cfg
-            target_cfg=$(find_kubeconfig_for_user "$user")
-            if [[ -z "$target_cfg" ]]; then
-                echo -e "${RED}Error: $ctx 의 kubeconfig 파일을 찾을 수 없습니다${NC}"
-                return 1
-            fi
-
-            kubectl config set-credentials "$user" \
-                --kubeconfig "$target_cfg" \
-                --exec-api-version=client.authentication.k8s.io/v1beta1 \
-                --exec-command=aws \
-                --exec-arg=eks \
-                --exec-arg=get-token \
-                --exec-arg=--cluster-name \
-                --exec-arg="$cluster_name" \
-                --exec-arg=--region \
-                --exec-arg="$region" \
-                --exec-arg=--output \
-                --exec-arg=json \
-                ${profile:+--exec-arg=--profile} \
-                ${profile:+--exec-arg="$profile"} \
-                >/dev/null
-        fi
-
-        echo -e "  ${GREEN}완료${NC}"
-    }
 
     case "$choice" in
         q|Q) echo "취소됨"; return ;;
