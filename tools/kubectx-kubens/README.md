@@ -48,6 +48,24 @@ kubens --unset           # 현재 namespace 해제
 kubens -r, --refresh     # 캐시 갱신 후 fzf
 ```
 
+## zsh 탭 자동완성
+
+`kubectx {tab}`와 `kubens {tab}` 자동완성을 지원합니다.
+
+- 옵션 자동완성: `-`, `-c`, `--current`, `--unset`, `-r`, `--refresh`, `-h`, `--help`
+- 값 자동완성:
+  - `kubectx`: context 목록
+  - `kubens`: 현재 context의 namespace 목록
+- 후보 목록은 기존 TTL 캐시를 재사용합니다.
+
+`compinit` 초기화 이후에 스크립트를 `source`해야 completion 등록이 됩니다.
+
+```bash
+autoload -Uz compinit
+compinit
+source /path/to/kubectx-kubens.zsh
+```
+
 ## 설정
 
 | 변수 | 설명 | 기본값 |

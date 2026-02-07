@@ -148,6 +148,39 @@ _kubectx_switch() {
   echo "Switched to context \"$target\"."
 }
 
+# Get context list (cache first, fallback to kubectl)
+_kctx_list_contexts() {
+  local cache_file="${KCTX_CACHE_DIR}/contexts"
+  local contexts
+
+  if ! contexts=$(_kctx_cache_get "$cache_file" "$KCTX_CACHE_TTL"); then
+    contexts=$(command kubectl config get-contexts -o name 2>/dev/null) || return 1
+    [[ -n "$contexts" ]] && _kctx_cache_set "$cache_file" "$contexts"
+  fi
+
+  [[ -n "$contexts" ]] || return 1
+  print -l "${(@f)contexts}"
+}
+
+# Get namespace list for current context (cache first, fallback to API)
+_kctx_list_namespaces() {
+  local context safe_context cache_file namespaces
+
+  context=$(command kubectl config current-context 2>/dev/null) || return 1
+  [[ -n "$context" ]] || return 1
+
+  safe_context="${context//[\/:]/_}"
+  cache_file="${KCTX_CACHE_DIR}/namespaces-${safe_context}"
+
+  if ! namespaces=$(_kctx_cache_get "$cache_file" "$KCTX_CACHE_TTL"); then
+    namespaces=$(command kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n') || return 1
+    [[ -n "$namespaces" ]] && _kctx_cache_set "$cache_file" "$namespaces"
+  fi
+
+  [[ -n "$namespaces" ]] || return 1
+  print -l "${(@f)namespaces}"
+}
+
 # ============================================================
 # kubectx - Kubernetes context switcher with fzf + cache
 # ============================================================
@@ -342,3 +375,46 @@ HELP
 
   [[ -n "$selected" ]] && _kubens_switch "$selected"
 }
+
+# ============================================================
+# zsh completion
+# ============================================================
+_kctx_kubectx_completion() {
+  local -a options contexts
+  options=("-" "-c" "--current" "--unset" "-r" "--refresh" "-h" "--help")
+  contexts=("${(@f)$(_kctx_list_contexts 2>/dev/null)}")
+
+  (( CURRENT == 2 )) || return 0
+
+  if [[ "$PREFIX" == -* ]]; then
+    compadd -Q -a options
+    return 0
+  fi
+
+  compadd -Q -a options
+  (( ${#contexts[@]} )) && compadd -Q -a contexts
+}
+
+_kctx_kubens_completion() {
+  local -a options namespaces
+  options=("-" "-c" "--current" "--unset" "-r" "--refresh" "-h" "--help")
+  namespaces=("${(@f)$(_kctx_list_namespaces 2>/dev/null)}")
+
+  (( CURRENT == 2 )) || return 0
+
+  if [[ "$PREFIX" == -* ]]; then
+    compadd -Q -a options
+    return 0
+  fi
+
+  compadd -Q -a options
+  (( ${#namespaces[@]} )) && compadd -Q -a namespaces
+}
+
+_kctx_register_completions() {
+  (( $+functions[compdef] )) || return 0
+  compdef _kctx_kubectx_completion kubectx
+  compdef _kctx_kubens_completion kubens
+}
+
+_kctx_register_completions
