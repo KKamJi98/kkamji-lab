@@ -6,7 +6,7 @@ Git worktree 구조의 bare repository를 관리하는 CLI 도구입니다.
 ## Features
 
 - **wt init**: bare repository 초기 설정 자동화
-- **wt add/remove**: worktree 추가/삭제
+- **wt add/remove**: worktree 추가/삭제 (복수/패턴 삭제 지원)
 - **wt status**: 모든 worktree의 상태 (clean/dirty, sync 상태) 확인
 - **wt fetch**: bare repo에서 `git fetch --all --prune` 실행
 - **wt pull**: fetch 후 모든 worktree를 동기화 (기본 ff-only, `--rebase` 옵션)
@@ -66,6 +66,15 @@ wt add chore/test123 -c --base staging
 
 # worktree 삭제
 wt remove staging
+
+# 여러 worktree 한 번에 삭제
+wt remove provider exemplars
+
+# 패턴으로 일괄 삭제 (branch/path name/full path glob)
+wt remove --match "fix/*"
+
+# 실제 삭제 없이 대상만 확인
+wt remove --match "feat/*" --dry-run
 
 # 강제 삭제 (dirty 상태여도)
 wt remove staging -f
@@ -230,7 +239,7 @@ git worktree add ../staging staging
 |---------|-------|-------------|
 | `wt init <url> [path]` | - | 새 bare repo + worktree 초기화 |
 | `wt add <branch>` | `a` | worktree 추가 |
-| `wt remove <branch>` | `rm` | worktree 삭제 |
+| `wt remove <identifier...> [--match <glob>] [--dry-run]` | `rm` | worktree 삭제 (복수/패턴 지원) |
 | `wt status` | `st` | 모든 worktree 상태 확인 |
 | `wt fetch` | `f` | `git fetch --all --prune` |
 | `wt pull` | `p` | fetch + ff-only (기본) |

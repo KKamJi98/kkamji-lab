@@ -7,9 +7,13 @@ import argparse
 import subprocess
 import sys
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 
-import argcomplete
+try:
+    import argcomplete
+except ImportError:  # pragma: no cover - optional dependency fallback
+    argcomplete = None
 
 
 # ANSI Colors
@@ -650,60 +654,164 @@ def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool, base: 
     return 0
 
 
-def cmd_remove(bare_repo: Path, identifier: str, force: bool) -> int:
-    """Remove a worktree by branch name or path."""
-    worktrees = get_worktrees(bare_repo)
+def find_worktrees_by_identifier(worktrees: list[Worktree], identifier: str) -> list[Worktree]:
+    """Find matching worktrees by branch/path identifier.
 
+    Priority:
+    1. exact branch name
+    2. exact path
+    3. exact directory name
+    4. path suffix
+    """
     # Resolve identifier to path if it looks like a path
     identifier_path = None
     if "/" in identifier or identifier.startswith("."):
         identifier_path = Path(identifier).resolve()
 
-    # Find worktree by branch name or path
-    target_wt = None
-    for wt in worktrees:
-        # Match by branch name
-        if wt.branch == identifier:
-            target_wt = wt
-            break
-        # Match by exact path
-        if identifier_path and wt.path == identifier_path:
-            target_wt = wt
-            break
-        # Match by directory name or path suffix
-        if wt.path.name == identifier or str(wt.path).endswith(identifier):
-            target_wt = wt
-            break
+    exact_matches: list[Worktree] = []
+    dirname_matches: list[Worktree] = []
+    suffix_matches: list[Worktree] = []
 
-    if target_wt is None:
-        print(f"{Color.RED}Error:{Color.RESET} No worktree found for '{identifier}'")
+    for wt in worktrees:
+        if wt.branch == identifier:
+            exact_matches.append(wt)
+            continue
+
+        if identifier_path and wt.path == identifier_path:
+            exact_matches.append(wt)
+            continue
+
+        if wt.path.name == identifier:
+            dirname_matches.append(wt)
+            continue
+
+        if str(wt.path).endswith(identifier):
+            suffix_matches.append(wt)
+
+    if exact_matches:
+        return exact_matches
+    if dirname_matches:
+        return dirname_matches
+    return suffix_matches
+
+
+def find_worktrees_by_pattern(worktrees: list[Worktree], pattern: str) -> list[Worktree]:
+    """Find worktrees by glob pattern on branch, dirname, or full path."""
+    matches = []
+    for wt in worktrees:
+        if (
+            fnmatch(wt.branch, pattern)
+            or fnmatch(wt.path.name, pattern)
+            or fnmatch(str(wt.path), pattern)
+        ):
+            matches.append(wt)
+    return matches
+
+
+def cmd_remove(
+    bare_repo: Path,
+    identifiers: list[str],
+    force: bool,
+    patterns: list[str] | None = None,
+    dry_run: bool = False,
+) -> int:
+    """Remove worktrees by identifier(s) or glob pattern(s)."""
+    worktrees = get_worktrees(bare_repo)
+    if not worktrees:
+        print("No worktrees found.")
+        return 1
+
+    patterns = patterns or []
+    if not identifiers and not patterns:
+        print(f"{Color.RED}Error:{Color.RESET} Please provide identifier(s) or --match pattern(s).")
+        return 1
+
+    targets: dict[Path, Worktree] = {}
+    missing_identifiers: list[str] = []
+    missing_patterns: list[str] = []
+
+    for identifier in identifiers:
+        matches = find_worktrees_by_identifier(worktrees, identifier)
+        if not matches:
+            missing_identifiers.append(identifier)
+            continue
+        for wt in matches:
+            targets[wt.path] = wt
+
+    for pattern in patterns:
+        matches = find_worktrees_by_pattern(worktrees, pattern)
+        if not matches:
+            missing_patterns.append(pattern)
+            continue
+        for wt in matches:
+            targets[wt.path] = wt
+
+    if not targets:
+        print(f"{Color.RED}Error:{Color.RESET} No matching worktrees found.")
+        if missing_identifiers:
+            print(f"  identifiers: {', '.join(missing_identifiers)}")
+        if missing_patterns:
+            print(f"  patterns: {', '.join(missing_patterns)}")
         print("\nAvailable worktrees:")
         for wt in worktrees:
             print(f"  {wt.branch:<30}  {wt.path}")
         return 1
 
-    print(f"Removing worktree: {target_wt.branch}")
-    print(f"  Path: {target_wt.path}")
+    target_list = sorted(targets.values(), key=lambda wt: (wt.branch, str(wt.path)))
+
+    print(f"Matched worktrees: {len(target_list)}")
+    for wt in target_list:
+        print(f"  {wt.branch:<30}  {wt.path}")
+
+    if missing_identifiers:
+        print(
+            f"{Color.YELLOW}WARN{Color.RESET} no match for identifier(s): {', '.join(missing_identifiers)}"
+        )
+    if missing_patterns:
+        print(
+            f"{Color.YELLOW}WARN{Color.RESET} no match for pattern(s): {', '.join(missing_patterns)}"
+        )
+
+    if dry_run:
+        print()
+        print(f"{Color.GREEN}OK{Color.RESET} dry run complete (no worktrees removed)")
+        return 0
+
     print()
 
-    # Check if dirty
-    if not force and is_dirty(target_wt):
-        print(f"{Color.RED}Error:{Color.RESET} Worktree has uncommitted changes.")
-        print("Use --force to remove anyway.")
-        return 1
+    ok_count = 0
+    skip_count = 0
+    fail_count = 0
 
-    # Remove worktree
-    args = ["worktree", "remove"]
-    if force:
-        args.append("--force")
-    args.append(str(target_wt.path))
+    for wt in target_list:
+        print(f"Removing worktree: {wt.branch}")
+        print(f"  Path: {wt.path}")
 
-    result = run_git(args, cwd=bare_repo)
-    if result.returncode != 0:
-        print(f"{Color.RED}FAIL{Color.RESET} {result.stderr.strip()}")
-        return 1
+        # Check if dirty
+        if not force and is_dirty(wt):
+            print(f"  {Color.YELLOW}SKIP{Color.RESET} uncommitted changes (use --force)")
+            skip_count += 1
+            print()
+            continue
 
-    print(f"{Color.GREEN}OK{Color.RESET} removed worktree")
+        # Remove worktree
+        args = ["worktree", "remove"]
+        if force:
+            args.append("--force")
+        args.append(str(wt.path))
+
+        result = run_git(args, cwd=bare_repo)
+        if result.returncode != 0:
+            print(f"  {Color.RED}FAIL{Color.RESET} {result.stderr.strip()}")
+            fail_count += 1
+        else:
+            print(f"  {Color.GREEN}OK{Color.RESET} removed worktree")
+            ok_count += 1
+        print()
+
+    print(f"Summary: ok={ok_count} skip={skip_count} fail={fail_count}")
+    if fail_count > 0 or skip_count > 0 or missing_identifiers or missing_patterns:
+        return 2
     return 0
 
 
@@ -773,8 +881,21 @@ def main() -> int:
     # remove command
     rm_parser = subparsers.add_parser("remove", aliases=["rm"], help="Remove a worktree")
     rm_parser.add_argument(
-        "identifier", help="Branch name or path of the worktree to remove"
+        "identifier",
+        nargs="*",
+        help="Branch/path identifiers to remove (supports multiple)",
     ).completer = _worktree_branch_completer
+    rm_parser.add_argument(
+        "-m",
+        "--match",
+        action="append",
+        help="Glob pattern to match branch/path for batch removal (repeatable)",
+    )
+    rm_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show matched worktrees without removing them",
+    )
     rm_parser.add_argument(
         "-f",
         "--force",
@@ -799,8 +920,9 @@ def main() -> int:
         "upstream", aliases=["up"], help="Set upstream to origin/<branch> for all worktrees"
     )
 
-    # Enable shell tab-completion
-    argcomplete.autocomplete(parser)
+    # Enable shell tab-completion when argcomplete is installed.
+    if argcomplete is not None:
+        argcomplete.autocomplete(parser)
 
     args = parser.parse_args()
 
@@ -842,7 +964,7 @@ def main() -> int:
     elif args.command in ("add", "a"):
         return cmd_add(bare_repo, args.branch, args.path, args.create, args.base)
     elif args.command in ("remove", "rm"):
-        return cmd_remove(bare_repo, args.identifier, args.force)
+        return cmd_remove(bare_repo, args.identifier, args.force, args.match, args.dry_run)
 
     return 0
 
