@@ -445,14 +445,6 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
     if result.returncode == 0:
         print(f"  {Color.GREEN}OK{Color.RESET} fetched all branches")
 
-    # Create .git file pointing to .bare directory
-    git_file = target_path / ".git"
-    try:
-        git_file.write_text("gitdir: ./.bare\n")
-        print(f"  {Color.GREEN}OK{Color.RESET} created .git file")
-    except OSError as e:
-        print(f"  {Color.YELLOW}WARN{Color.RESET} failed to create .git file: {e}")
-
     # Step 3: Create main worktree
     print()
     print(f"{Color.BOLD}Step 3:{Color.RESET} Create worktrees")

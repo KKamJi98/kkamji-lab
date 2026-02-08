@@ -208,6 +208,8 @@ my-project/
 └── feat-new-feature/   # worktree for feature branch
 ```
 
+루트 디렉토리(`my-project/`)는 컨테이너 역할만 하며 `.git` 파일/디렉토리를 생성하지 않습니다.
+
 ### 수동 설정 방법 (참고)
 
 `wt init` 없이 수동으로 설정하려면:
