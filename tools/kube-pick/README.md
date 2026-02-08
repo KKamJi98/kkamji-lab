@@ -70,5 +70,5 @@ end
 - Select all configs by entering `all`
 - Syncs `KUBECONFIG` across terminals via `~/.config/kubepick/kubeconfig`
 - Updates shell rc file (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`)
-- Creates automatic backups before modifications
+- Creates automatic backups before modifications (keeps the 2 most recent backups)
 - Shows currently active configurations
