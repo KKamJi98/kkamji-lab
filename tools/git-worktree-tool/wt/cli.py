@@ -706,6 +706,8 @@ def cmd_remove(
     force: bool,
     patterns: list[str] | None = None,
     dry_run: bool = False,
+    delete_branch: bool = False,
+    delete_remote: bool = False,
 ) -> int:
     """Remove worktrees by identifier(s) or glob pattern(s)."""
     worktrees = get_worktrees(bare_repo)
@@ -765,8 +767,15 @@ def cmd_remove(
         )
 
     if dry_run:
+        if delete_branch:
+            print()
+            for wt in target_list:
+                msg = f"  {wt.branch}: worktree + local branch will be deleted"
+                if delete_remote:
+                    msg += " + remote branch will be deleted"
+                print(msg)
         print()
-        print(f"{Color.GREEN}OK{Color.RESET} dry run complete (no worktrees removed)")
+        print(f"{Color.GREEN}OK{Color.RESET} dry run complete (no changes made)")
         return 0
 
     print()
@@ -796,9 +805,31 @@ def cmd_remove(
         if result.returncode != 0:
             print(f"  {Color.RED}FAIL{Color.RESET} {result.stderr.strip()}")
             fail_count += 1
-        else:
-            print(f"  {Color.GREEN}OK{Color.RESET} removed worktree")
-            ok_count += 1
+            print()
+            continue
+
+        print(f"  {Color.GREEN}OK{Color.RESET} removed worktree")
+        ok_count += 1
+
+        # Delete local branch if requested
+        if delete_branch and wt.branch and not wt.branch.startswith("(detached"):
+            delete_flag = "-D" if force else "-d"
+            br_result = run_git(["branch", delete_flag, wt.branch], cwd=bare_repo)
+            if br_result.returncode != 0:
+                print(f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}")
+            else:
+                print(f"  {Color.GREEN}OK{Color.RESET} deleted local branch {wt.branch}")
+
+            # Delete remote branch if requested
+            if delete_remote:
+                rr = run_git(["push", "origin", "--delete", wt.branch], cwd=bare_repo)
+                if rr.returncode != 0:
+                    print(f"  {Color.RED}FAIL{Color.RESET} remote delete: {rr.stderr.strip()}")
+                else:
+                    print(
+                        f"  {Color.GREEN}OK{Color.RESET} deleted remote branch origin/{wt.branch}"
+                    )
+
         print()
 
     print(f"Summary: ok={ok_count} skip={skip_count} fail={fail_count}")
@@ -894,6 +925,17 @@ def main() -> int:
         action="store_true",
         help="Force removal even if dirty",
     )
+    rm_parser.add_argument(
+        "-b",
+        "--branch",
+        action="store_true",
+        help="Delete local branch after removing worktree",
+    )
+    rm_parser.add_argument(
+        "--remote",
+        action="store_true",
+        help="Also delete remote branch (requires -b/--branch)",
+    )
 
     # Existing commands
     subparsers.add_parser("status", aliases=["st"], help="Show status of all worktrees")
@@ -956,7 +998,18 @@ def main() -> int:
     elif args.command in ("add", "a"):
         return cmd_add(bare_repo, args.branch, args.path, args.create, args.base)
     elif args.command in ("remove", "rm"):
-        return cmd_remove(bare_repo, args.identifier, args.force, args.match, args.dry_run)
+        if args.remote and not args.branch:
+            print(f"{Color.RED}Error:{Color.RESET} --remote requires -b/--branch flag")
+            return 1
+        return cmd_remove(
+            bare_repo,
+            args.identifier,
+            args.force,
+            args.match,
+            args.dry_run,
+            args.branch,
+            args.remote,
+        )
 
     return 0
 

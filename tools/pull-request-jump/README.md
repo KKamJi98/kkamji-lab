@@ -1,4 +1,4 @@
-# pull-request-jump (pr)
+# pull-request-jump (prj)
 
 Open GitHub/Bitbucket Cloud pull request pages from the CLI.
 
@@ -24,20 +24,20 @@ uv tool uninstall pull-request-jump
 
 ```bash
 # Open PR page for current branch (auto-detect provider)
-pr open
+prj open
 
 # Use a specific remote
-pr open --remote origin
+prj open --remote origin
 
 # Override base or head branch
-pr open --base main --head feature/my-branch
+prj open --base main --head feature/my-branch
 
 # Force provider if auto-detection fails
-pr open --provider github
-pr open --provider bitbucket
+prj open --provider github
+prj open --provider bitbucket
 
 # Print URL without opening the browser
-pr open --print
+prj open --print
 ```
 
 Notes:

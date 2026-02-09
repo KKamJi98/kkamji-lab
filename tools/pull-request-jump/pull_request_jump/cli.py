@@ -164,9 +164,7 @@ def resolve_provider(remote: RemoteInfo, override: str | None) -> Provider:
         elif host.endswith("bitbucket.org"):
             key = "bitbucket"
         else:
-            raise PrOpenError(
-                "Unsupported host. Use --provider github|bitbucket to override."
-            )
+            raise PrOpenError("Unsupported host. Use --provider github|bitbucket to override.")
 
     provider = PROVIDERS.get(key)
     if not provider:
