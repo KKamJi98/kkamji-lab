@@ -1,35 +1,49 @@
-# Created by https://www.toptal.com/developers/gitignore/api/vagrant,powershell
-# Edit at https://www.toptal.com/developers/gitignore?templates=vagrant,powershell
+# === Secrets / Environment ===
+.env
+.env.local
+.env.*.local
 
-### PowerShell ###
-# Exclude packaged modules
-*.zip
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.ruff_cache/
+dist/
+build/
 
-# Exclude .NET assemblies from source
-*.dll
-
-### Vagrant ###
-# General
+# === Vagrant ===
 .vagrant/
 .vagrant.d/
-
-# Log files (if you are creating logs in debug mode, uncomment this)
-# *.log
-
-### Vagrant Patch ###
 *.box
-
-# End of https://www.toptal.com/developers/gitignore/api/vagrant,powershell
-
 vagrant-hyperv
+
+# === Terraform ===
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+
+# === IDE / Editor ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Agent artifacts ===
 GEMINI.md
 AGENTS.md
 LAST_CODEX_RUN.md
+LAST_AGENT_RUN.md
 
-# Local tool artifacts
-tools/**/.venv/
-tools/**/.ruff_cache/
-tools/**/__pycache__/
-tools/**/*.pyc
-tools/**/.claude/
-tools/**/LAST_AGENT_RUN.md
+# === Misc ===
+*.zip
+*.dll
+*.log
