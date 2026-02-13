@@ -19,13 +19,19 @@ from .aws import (
     validate_credentials,
 )
 from .config import build_config
-from .display import run_display
+from .display import run_display, run_propagation_display
+from .propagation import (
+    DEFAULT_RESOLVERS,
+    PropagationConfig,
+    PropagationProber,
+    PropagationResolver,
+)
 from .resolver import AliasResolution, WeightedResolver, resolve_alias_targets
 from .sender import TrafficSender, poll_route53
-from .stats import Stats
+from .stats import PropagationStats, Stats
 
 app = typer.Typer(
-    name="r53mon",
+    name="dnsmon",
     help="Route53 Weighted Traffic Monitor",
     no_args_is_help=True,
 )
@@ -34,7 +40,7 @@ console = Console()
 
 def version_callback(value: bool):
     if value:
-        console.print(f"route53-traffic-monitor v{__version__}")
+        console.print(f"dns-monitor v{__version__}")
         raise typer.Exit()
 
 
@@ -245,6 +251,102 @@ def watch(
         for sid, count in sorted(snapshot.distribution.items()):
             ratio = count / total * 100 if total > 0 else 0
             console.print(f"  [cyan]{sid}[/cyan]: {count:,} ({ratio:.1f}%)")
+
+
+@app.command()
+def propagation(
+    record_name: Annotated[
+        str,
+        typer.Option("--record-name", "-r", help="모니터링할 DNS 레코드"),
+    ],
+    resolvers: Annotated[
+        str | None,
+        typer.Option("--resolvers", help="리졸버 IP (쉼표 구분, 예: 8.8.8.8,1.1.1.1)"),
+    ] = None,
+    tps: Annotated[
+        int,
+        typer.Option("--tps", "-t", help="초당 조회 횟수 (1~100)"),
+    ] = 2,
+    record_type: Annotated[
+        str,
+        typer.Option("--type", help="레코드 타입 (A, CNAME)"),
+    ] = "A",
+):
+    """여러 공용 DNS 리졸버에 질의하여 DNS 전파 상태를 실시간 모니터링합니다."""
+    # 리졸버 파싱
+    resolver_list: list[tuple[str, str]]
+    if resolvers:
+        resolver_list = [(ip.strip(), ip.strip()) for ip in resolvers.split(",") if ip.strip()]
+    else:
+        resolver_list = list(DEFAULT_RESOLVERS)
+
+    try:
+        cfg = PropagationConfig(
+            record_name=record_name,
+            resolvers=resolver_list,
+            tps=tps,
+            record_type=record_type.upper(),
+        )
+    except ValueError as e:
+        console.print(f"[red]설정 오류: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    console.print(f"[bold green]대상: {cfg.record_name} ({cfg.record_type})[/bold green]")
+    console.print(f"[dim]TPS: {cfg.tps} | Resolvers: {len(cfg.resolvers)}[/dim]")
+
+    resolver = PropagationResolver(cfg.record_name, cfg.record_type)
+
+    # 테스트 질의 (각 리졸버 1회)
+    console.print("[bold]리졸버 테스트 질의:[/bold]")
+    ok_count = 0
+    for ip, label in cfg.resolvers:
+        values = resolver.resolve_one(ip)
+        if values:
+            ok_count += 1
+            console.print(f"  [green]{label} ({ip})[/green]: {', '.join(values)}")
+        else:
+            console.print(f"  [red]{label} ({ip})[/red]: 응답 없음")
+
+    if ok_count == 0:
+        console.print("[red]모든 리졸버에서 응답을 받지 못했습니다.[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]{ok_count}/{len(cfg.resolvers)} 리졸버 정상[/green]")
+    console.print("[green]모니터링을 시작합니다...[/green]\n")
+
+    # 비동기 이벤트 루프
+    stats = PropagationStats()
+    prober = PropagationProber(cfg, stats, resolver)
+
+    async def _run():
+        tasks = [
+            asyncio.create_task(prober.run()),
+            asyncio.create_task(
+                run_propagation_display(cfg.record_name, cfg.record_type, stats, len(cfg.resolvers))
+            ),
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            pass
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        prober.stop()
+        # 최종 통계 출력
+        snapshot = stats.get_snapshot()
+        console.print("\n[bold]최종 통계[/bold]")
+        console.print(f"  총 질의: {snapshot.total_queries:,}")
+        console.print(f"  에러: {snapshot.errors}")
+        total = snapshot.total_queries - snapshot.errors
+        if snapshot.overall_distribution:
+            console.print("[bold]  전체 분포:[/bold]")
+            for ip, count in sorted(
+                snapshot.overall_distribution.items(), key=lambda x: x[1], reverse=True
+            ):
+                ratio = count / total * 100 if total > 0 else 0
+                console.print(f"    [cyan]{ip}[/cyan]: {count:,} ({ratio:.1f}%)")
 
 
 if __name__ == "__main__":

@@ -51,10 +51,10 @@ class ConfigSources:
         m = self._merged()
         endpoint = m.get("endpoint")
         if not endpoint:
-            raise ValueError("endpoint is required (--endpoint or R53MON_ENDPOINT)")
+            raise ValueError("endpoint is required (--endpoint or DNSMON_ENDPOINT)")
         hosted_zone_id = m.get("hosted_zone_id")
         if not hosted_zone_id:
-            raise ValueError("hosted_zone_id is required (--zone-id or R53MON_HOSTED_ZONE_ID)")
+            raise ValueError("hosted_zone_id is required (--zone-id or DNSMON_HOSTED_ZONE_ID)")
 
         record_name = m.get("record_name") or _extract_host(str(endpoint))
 
@@ -71,11 +71,11 @@ def load_env_vars() -> dict[str, object]:
     """환경변수에서 설정을 읽는다."""
     result: dict[str, object] = {}
     mapping = {
-        "R53MON_ENDPOINT": "endpoint",
-        "R53MON_HOSTED_ZONE_ID": "hosted_zone_id",
-        "R53MON_RECORD_NAME": "record_name",
-        "R53MON_TPS": "tps",
-        "R53MON_NO_HTTP": "no_http",
+        "DNSMON_ENDPOINT": "endpoint",
+        "DNSMON_HOSTED_ZONE_ID": "hosted_zone_id",
+        "DNSMON_RECORD_NAME": "record_name",
+        "DNSMON_TPS": "tps",
+        "DNSMON_NO_HTTP": "no_http",
     }
     for env_key, config_key in mapping.items():
         val = os.environ.get(env_key)
@@ -95,7 +95,7 @@ def load_toml_file(path: Path) -> dict[str, object]:
         return {}
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    section = data.get("r53mon", data)
+    section = data.get("dnsmon", data)
     result: dict[str, object] = {}
     key_map = {
         "endpoint": "endpoint",
@@ -135,7 +135,7 @@ def build_config(
     sources = ConfigSources()
 
     # TOML
-    toml_path = config_file or Path("r53mon.toml")
+    toml_path = config_file or Path("dnsmon.toml")
     sources.toml = load_toml_file(toml_path)
 
     # 환경변수

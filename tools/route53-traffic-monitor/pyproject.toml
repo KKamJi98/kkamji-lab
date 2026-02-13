@@ -1,5 +1,5 @@
 [project]
-name = "route53-traffic-monitor"
+name = "dns-monitor"
 version = "0.1.0"
 description = "Route53 Weighted Traffic Monitor - 가중치 설정 vs 실제 트래픽 분포 실시간 비교"
 readme = "README.md"
@@ -15,14 +15,14 @@ dependencies = [
 ]
 
 [project.scripts]
-r53mon = "r53_monitor.cli:app"
+dnsmon = "dns_monitor.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/r53_monitor"]
+packages = ["src/dns_monitor"]
 
 [tool.ruff]
 line-length = 100
