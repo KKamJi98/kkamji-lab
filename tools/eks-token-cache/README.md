@@ -69,7 +69,7 @@ brew install jq awscli yq
 EKS_TOKEN_DEBUG=1 kubectl get nodes
 
 # 출력 예시:
-# [DEBUG] Token expires in 796s (cluster: staging-32)
+# [DEBUG] Token expires in 796s (cluster: dev-cluster)
 # [DEBUG] Using cached token
 ```
 
@@ -112,10 +112,11 @@ AWS 세션이 변경되면(re-login 등) 이전 세션의 토큰이 캐시에 �
 
 ```
 ~/.kube/cache/eks-tokens/
-├── staging-32_ap-northeast-2_company.json       # 토큰 (cluster_region_profile)
-├── staging-32_ap-northeast-2_company.json.meta  # credential fingerprint
-├── prod-32_ap-northeast-2_company.json
-└── my-cluster_ap-northeast-2.json               # profile 없는 경우
+├── dev-cluster_ap-northeast-2_acme.json        # 토큰 (cluster_region_profile)
+├── dev-cluster_ap-northeast-2_acme.json.meta   # credential fingerprint
+├── dev-cluster_ap-northeast-2_acme.json.error  # 에러 네거티브 캐시
+├── prod-cluster_ap-northeast-2_acme.json
+└── my-cluster_ap-northeast-2.json              # profile 없는 경우
 ```
 
 ### 원본 exec 백업 (자동)
@@ -137,6 +138,7 @@ AWS 세션이 변경되면(re-login 등) 이전 세션의 토큰이 캐시에 �
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
 | `EKS_TOKEN_DEBUG` | 디버그 로그 출력 | `0` (비활성) |
+| `EKS_TOKEN_ERROR_TTL` | 에러 네거티브 캐시 유효 시간 (초) | `30` |
 | `EKS_TOKEN_CACHE_SCRIPT` | 캐시 스크립트 경로 (manager용) | `~/.kube/eks-token-cache.sh` |
 | `EKS_TOKEN_CACHE_DIR` | 토큰 캐시 디렉토리 (aws hook용) | `~/.kube/cache/eks-tokens` |
 
@@ -145,6 +147,24 @@ AWS 세션이 변경되면(re-login 등) 이전 세션의 토큰이 캐시에 �
 | 상수 | 설명 | 기본값 |
 |------|------|--------|
 | `SAFETY_MARGIN` | 만료 전 갱신 여유 시간 | `60`초 |
+
+### 에러 중복 억제 (네거티브 캐시)
+
+kubectl은 API 디스커버리 과정에서 exec credential plugin을 5~6회 반복 호출합니다. AWS 세션 만료 시 매 호출마다 동일한 에러가 출력되는 문제를 방지하기 위해 에러 네거티브 캐시를 사용합니다.
+
+| 시나리오 | 동작 |
+|----------|------|
+| 첫 실패 | AWS CLI stderr 캡처 → 에러 분류 → `.error` 캐시 저장 → 상세 에러 출력 |
+| 30초 내 재시도 | 에러 캐시 hit → 간략 한줄 출력 → exit 1 (AWS CLI 호출 없음) |
+| `aws sso login` 후 재시도 | credential fingerprint 변경 감지 → 에러 캐시 삭제 → 정상 재시도 |
+| TTL 만료 후 재시도 | 에러 캐시 무효 → AWS CLI 재시도 |
+
+에러 유형별 자동 분류:
+- `session_expired`: 세션 만료 → `aws sso login --profile <profile>` 안내
+- `no_credentials`: 자격증명 없음 → `aws sso login` 또는 `aws configure` 안내
+- `access_denied`: 권한 부족 → IAM 권한 확인 안내
+- `cluster_not_found`: 클러스터 미존재 → 클러스터명/리전 확인 안내
+- `network_error`: 네트워크 오류 → 연결 확인 안내
 
 ## 문제 해결
 
@@ -189,7 +209,7 @@ aws() {
       if [[ -d "$EKS_TOKEN_CACHE_DIR" ]]; then
         local count=$(find "$EKS_TOKEN_CACHE_DIR" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
         if (( count > 0 )); then
-          rm -f "${EKS_TOKEN_CACHE_DIR}"/*.json "${EKS_TOKEN_CACHE_DIR}"/*.meta 2>/dev/null
+          rm -f "${EKS_TOKEN_CACHE_DIR}"/*.json "${EKS_TOKEN_CACHE_DIR}"/*.meta "${EKS_TOKEN_CACHE_DIR}"/*.error 2>/dev/null
           echo "[aws-login-hook] EKS 토큰 캐시 삭제됨 (${count}개)" >&2
         fi
       fi
