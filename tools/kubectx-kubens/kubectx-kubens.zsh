@@ -17,9 +17,12 @@
 # Get kubeconfig file modification time (for cache invalidation)
 _kctx_kubeconfig_mtime() {
   local cfg="${KUBECONFIG:-$HOME/.kube/config}"
-  # Handle colon-separated KUBECONFIG (use first file)
-  cfg="${cfg%%:*}"
-  [[ -f "$cfg" ]] && stat -f %m "$cfg" 2>/dev/null || echo 0
+  local -a files mtimes
+  files=("${(@s/:/)cfg}")
+  for f in "${files[@]}"; do
+    [[ -f "$f" ]] && mtimes+=($(stat -f %m "$f" 2>/dev/null))
+  done
+  echo "${(j/:/)mtimes:-0}"
 }
 
 # Get cached data if valid (checks TTL and kubeconfig mtime)
@@ -210,18 +213,55 @@ kubectx() {
       return
       ;;
     --unset)
-      command kubectl config unset current-context >/dev/null 2>&1
-      echo "Context unset."
+      if [[ -n "$2" ]]; then
+        echo "Error: --unset takes no arguments. Did you mean '--delete $2'?" >&2
+        return 1
+      fi
+      local _cfg="${KUBECONFIG:-$HOME/.kube/config}"
+      local -a _files
+      _files=("${(@s/:/)_cfg}")
+      local _cleared=0
+      for f in "${_files[@]}"; do
+        [[ -f "$f" ]] || continue
+        if command grep -q '^current-context:' "$f" 2>/dev/null; then
+          command kubectl config unset current-context --kubeconfig="$f" >/dev/null 2>&1 && ((_cleared++))
+        fi
+      done
+      rm -f "${KCTX_CACHE_DIR}/contexts" 2>/dev/null
+      echo "Context unset. ($_cleared file(s) updated)"
+      return
+      ;;
+    -d|--delete)
+      local target="$2"
+      if [[ -z "$target" ]]; then
+        echo "Error: --delete requires a context name" >&2
+        echo "Usage: kubectx --delete <name>" >&2
+        return 1
+      fi
+      command kubectl config delete-context "$target" || return 1
+      # Clean up dangling current-context references in all KUBECONFIG files
+      local _cfg="${KUBECONFIG:-$HOME/.kube/config}"
+      local -a _files
+      local _line="current-context: ${target}"
+      _files=("${(@s/:/)_cfg}")
+      for f in "${_files[@]}"; do
+        [[ -f "$f" ]] || continue
+        if command grep -qxF "$_line" "$f" 2>/dev/null; then
+          command kubectl config unset current-context --kubeconfig="$f" >/dev/null 2>&1
+        fi
+      done
+      rm -f "${KCTX_CACHE_DIR}/contexts" 2>/dev/null
       return
       ;;
     -h|--help)
       cat <<'HELP'
-Usage: kubectx                  : fzf로 context 선택
-       kubectx <name>           : context 전환
-       kubectx -                : 이전 context로 전환
-       kubectx -c, --current    : 현재 context 출력
-       kubectx --unset          : 현재 context 해제
-       kubectx -r, --refresh    : 캐시 갱신 후 fzf
+Usage: kubectx                     : fzf로 context 선택
+       kubectx <name>              : context 전환
+       kubectx -                   : 이전 context로 전환
+       kubectx -c, --current       : 현재 context 출력
+       kubectx --unset             : 현재 context 해제
+       kubectx -d, --delete <name> : context 삭제
+       kubectx -r, --refresh       : 캐시 갱신 후 fzf
 HELP
       return
       ;;
@@ -301,7 +341,16 @@ kubens() {
       return
       ;;
     --unset)
-      command kubectl config set-context --current --namespace= >/dev/null 2>&1
+      if ! command kubectl config set-context --current --namespace= >/dev/null 2>&1; then
+        echo "Error: Failed to unset namespace (no current context?)" >&2
+        return 1
+      fi
+      local _ctx _safe_ctx
+      _ctx=$(command kubectl config current-context 2>/dev/null)
+      if [[ -n "$_ctx" ]]; then
+        _safe_ctx="${_ctx//[\/:]/_}"
+        rm -f "${KCTX_CACHE_DIR}/namespaces-${_safe_ctx}" 2>/dev/null
+      fi
       echo "Namespace unset."
       return
       ;;
@@ -381,18 +430,20 @@ HELP
 # ============================================================
 _kctx_kubectx_completion() {
   local -a options contexts
-  options=("-" "-c" "--current" "--unset" "-r" "--refresh" "-h" "--help")
-  contexts=("${(@f)$(_kctx_list_contexts 2>/dev/null)}")
+  options=("-" "-c" "--current" "--unset" "-d" "--delete" "-r" "--refresh" "-h" "--help")
 
-  (( CURRENT == 2 )) || return 0
-
-  if [[ "$PREFIX" == -* ]]; then
+  if (( CURRENT == 2 )); then
+    contexts=("${(@f)$(_kctx_list_contexts 2>/dev/null)}")
+    if [[ "$PREFIX" == -* ]]; then
+      compadd -Q -a options
+      return 0
+    fi
     compadd -Q -a options
-    return 0
+    (( ${#contexts[@]} )) && compadd -Q -a contexts
+  elif (( CURRENT == 3 )) && [[ "${words[2]}" == (-d|--delete) ]]; then
+    contexts=("${(@f)$(_kctx_list_contexts 2>/dev/null)}")
+    (( ${#contexts[@]} )) && compadd -Q -a contexts
   fi
-
-  compadd -Q -a options
-  (( ${#contexts[@]} )) && compadd -Q -a contexts
 }
 
 _kctx_kubens_completion() {
