@@ -51,7 +51,13 @@ def test_find_bare_repo_can_use_parent_dot_bare_without_root_git_file(
     branch_dir.mkdir(parents=True)
     bare_dir.mkdir(parents=True)
 
-    monkeypatch.setattr(cli, "run_git", lambda _args, cwd=None: _fail())
+    def fake_run_git(args: list[str], cwd=None):
+        # The bare-repo verification call should succeed
+        if args == ["rev-parse", "--is-bare-repository"]:
+            return _ok(stdout="true\n")
+        return _fail()
+
+    monkeypatch.setattr(cli, "run_git", fake_run_git)
 
     assert cli.find_bare_repo(root) == bare_dir
     assert cli.find_bare_repo(branch_dir) == bare_dir

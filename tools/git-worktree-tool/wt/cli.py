@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -16,14 +18,31 @@ except ImportError:  # pragma: no cover - optional dependency fallback
     argcomplete = None
 
 
-# ANSI Colors
+# ANSI Colors - disabled when NO_COLOR is set or stdout is not a TTY
+def _colors_enabled() -> bool:
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    return sys.stdout.isatty()
+
+
 class Color:
-    RED = "\033[0;31m"
-    GREEN = "\033[0;32m"
-    YELLOW = "\033[0;33m"
-    BLUE = "\033[0;34m"
-    BOLD = "\033[1m"
-    RESET = "\033[0m"
+    RED = ""
+    GREEN = ""
+    YELLOW = ""
+    BLUE = ""
+    BOLD = ""
+    RESET = ""
+
+    @classmethod
+    def init(cls) -> None:
+        """Initialize color codes based on terminal capabilities."""
+        if _colors_enabled():
+            cls.RED = "\033[0;31m"
+            cls.GREEN = "\033[0;32m"
+            cls.YELLOW = "\033[0;33m"
+            cls.BLUE = "\033[0;34m"
+            cls.BOLD = "\033[1m"
+            cls.RESET = "\033[0m"
 
 
 @dataclass
@@ -32,15 +51,23 @@ class Worktree:
     branch: str
     commit: str
     is_bare: bool = False
+    is_detached: bool = False
+    _dirty: bool | None = field(default=None, repr=False, compare=False)
+    _has_upstream: bool | None = field(default=None, repr=False, compare=False)
 
 
 def run_git(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    """Run a git command and return the result."""
+    """Run a git command and return the result.
+
+    Sets LC_ALL=C to ensure consistent English output regardless of user locale.
+    """
+    env = {**os.environ, "LC_ALL": "C"}
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -67,10 +94,31 @@ def find_bare_repo(start_path: Path | None = None) -> Path | None:
     while current != current.parent:
         bare_path = current / ".bare"
         if bare_path.is_dir():
-            return bare_path
+            # Verify it's actually a git bare repository
+            verify = run_git(["rev-parse", "--is-bare-repository"], cwd=bare_path)
+            if verify.returncode == 0 and verify.stdout.strip() == "true":
+                return bare_path
         current = current.parent
 
     return None
+
+
+def _parse_worktree_record(record: dict[str, str]) -> Worktree | None:
+    """Parse a single worktree porcelain record into a Worktree, or None if bare/invalid."""
+    if "bare" in record:
+        return None
+    path = Path(record.get("worktree", ""))
+    branch = record.get("branch", "").replace("refs/heads/", "")
+    commit = record.get("HEAD", "")[:8]
+
+    detached = False
+    if not branch and commit:
+        branch = f"(detached {commit})"
+        detached = True
+
+    if not path.exists():
+        return None
+    return Worktree(path=path, branch=branch, commit=commit, is_detached=detached)
 
 
 def get_worktrees(bare_repo: Path) -> list[Worktree]:
@@ -85,17 +133,9 @@ def get_worktrees(bare_repo: Path) -> list[Worktree]:
     for line in result.stdout.strip().split("\n"):
         if not line:
             if current_wt:
-                path = Path(current_wt.get("worktree", ""))
-                is_bare = "bare" in current_wt
-                branch = current_wt.get("branch", "").replace("refs/heads/", "")
-                commit = current_wt.get("HEAD", "")[:8]
-
-                # Mark detached HEAD state
-                if not branch and commit:
-                    branch = f"(detached {commit})"
-
-                if not is_bare and path.exists():
-                    worktrees.append(Worktree(path=path, branch=branch, commit=commit))
+                wt = _parse_worktree_record(current_wt)
+                if wt is not None:
+                    worktrees.append(wt)
                 current_wt = {}
             continue
 
@@ -108,36 +148,37 @@ def get_worktrees(bare_repo: Path) -> list[Worktree]:
         elif line == "bare":
             current_wt["bare"] = "true"
 
-    # Handle last worktree
-    if current_wt and "bare" not in current_wt:
-        path = Path(current_wt.get("worktree", ""))
-        branch = current_wt.get("branch", "").replace("refs/heads/", "")
-        commit = current_wt.get("HEAD", "")[:8]
-
-        # Mark detached HEAD state
-        if not branch and commit:
-            branch = f"(detached {commit})"
-
-        if path.exists():
-            worktrees.append(Worktree(path=path, branch=branch, commit=commit))
+    # Handle last worktree (porcelain output may not end with blank line)
+    if current_wt:
+        wt = _parse_worktree_record(current_wt)
+        if wt is not None:
+            worktrees.append(wt)
 
     return worktrees
 
 
 def is_dirty(wt: Worktree) -> bool:
-    """Check if worktree has uncommitted changes."""
+    """Check if worktree has uncommitted changes. Result is cached on the Worktree."""
+    if wt._dirty is not None:
+        return wt._dirty
     result = run_git(["status", "--porcelain"], cwd=wt.path)
-    return bool(result.stdout.strip())
+    wt._dirty = bool(result.stdout.strip())
+    return wt._dirty
 
 
 def has_upstream(wt: Worktree) -> bool:
-    """Check if branch has upstream configured."""
+    """Check if branch has upstream configured. Result is cached on the Worktree."""
+    if wt._has_upstream is not None:
+        return wt._has_upstream
     result = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=wt.path)
-    return result.returncode == 0
+    wt._has_upstream = result.returncode == 0
+    return wt._has_upstream
 
 
 def get_sync_status(wt: Worktree) -> str:
     """Get sync status with upstream (ahead/behind)."""
+    if wt.is_detached:
+        return ""
     result = run_git(
         ["rev-list", "--left-right", "--count", f"{wt.branch}...origin/{wt.branch}"], cwd=wt.path
     )
@@ -160,13 +201,48 @@ def colorize(text: str, color: str) -> str:
     return f"{color}{text}{Color.RESET}"
 
 
-def cmd_status(bare_repo: Path) -> int:
+def cmd_status(bare_repo: Path, json_output: bool = False) -> int:
     """Show status of all worktrees."""
     worktrees = get_worktrees(bare_repo)
 
     if not worktrees:
-        print("No worktrees found.")
+        if json_output:
+            print(json.dumps({"worktrees": [], "summary": {"total": 0, "clean": 0, "dirty": 0}}))
+        else:
+            print("No worktrees found.")
         return 1
+
+    if json_output:
+        items = []
+        for wt in worktrees:
+            dirty = is_dirty(wt)
+            if wt.is_detached:
+                sync_status = "detached"
+            elif has_upstream(wt):
+                sync_status = get_sync_status(wt)
+            else:
+                sync_status = "no upstream"
+            items.append(
+                {
+                    "branch": wt.branch,
+                    "path": str(wt.path),
+                    "commit": wt.commit,
+                    "status": "dirty" if dirty else "clean",
+                    "sync": sync_status,
+                    "detached": wt.is_detached,
+                }
+            )
+        dirty_count = sum(1 for i in items if i["status"] == "dirty")
+        output = {
+            "worktrees": items,
+            "summary": {
+                "total": len(items),
+                "clean": len(items) - dirty_count,
+                "dirty": dirty_count,
+            },
+        }
+        print(json.dumps(output, indent=2))
+        return 2 if dirty_count > 0 else 0
 
     # Calculate max branch length for alignment
     max_branch_len = max(len(wt.branch) for wt in worktrees)
@@ -185,8 +261,15 @@ def cmd_status(bare_repo: Path) -> int:
         else:
             status = colorize("CLEAN".ljust(8), Color.GREEN)
 
-        sync_raw = get_sync_status(wt) if has_upstream(wt) else "no upstream"
+        if wt.is_detached:
+            sync_raw = "detached"
+        elif has_upstream(wt):
+            sync_raw = get_sync_status(wt)
+        else:
+            sync_raw = "no upstream"
         if sync_raw.startswith("↓"):
+            sync = colorize(sync_raw.ljust(14), Color.YELLOW)
+        elif sync_raw == "detached":
             sync = colorize(sync_raw.ljust(14), Color.YELLOW)
         else:
             sync = sync_raw.ljust(14)
@@ -220,6 +303,32 @@ def cmd_fetch(bare_repo: Path) -> int:
     return 0
 
 
+def cmd_prune(bare_repo: Path, dry_run: bool = False) -> int:
+    """Prune stale worktree references."""
+    args = ["worktree", "prune"]
+    if dry_run:
+        args.append("--dry-run")
+
+    print(f"{Color.BLUE}Pruning worktree references...{Color.RESET}")
+    result = run_git(args, cwd=bare_repo)
+
+    if result.returncode != 0:
+        print(f"{Color.RED}FAIL{Color.RESET} prune failed")
+        if result.stderr:
+            print(result.stderr.strip())
+        return 1
+
+    if dry_run:
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        else:
+            print(f"{Color.GREEN}OK{Color.RESET} no stale references found")
+    else:
+        print(f"{Color.GREEN}OK{Color.RESET} pruned stale worktree references")
+
+    return 0
+
+
 def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
     """Pull all worktrees (ff-only by default, rebase with --rebase)."""
     # First fetch
@@ -244,6 +353,11 @@ def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
     for wt in worktrees:
         print(f"\n==> {wt.branch} ({wt.path.name})")
 
+        if wt.is_detached:
+            print(f"  {Color.YELLOW}SKIP{Color.RESET} detached HEAD")
+            skip_count += 1
+            continue
+
         if is_dirty(wt):
             print(f"  {Color.YELLOW}SKIP{Color.RESET} dirty working tree")
             skip_count += 1
@@ -259,11 +373,15 @@ def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
             skip_count += 1
             continue
 
+        # Snapshot HEAD before sync to detect actual changes
+        head_before = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
+
         if rebase:
             # Try rebase onto remote branch
             result = run_git(["rebase", f"origin/{wt.branch}"], cwd=wt.path)
             if result.returncode == 0:
-                if "is up to date" in result.stdout or "Current branch" in result.stdout:
+                head_after = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
+                if head_before == head_after:
                     print(f"  {Color.GREEN}OK{Color.RESET} already up to date")
                 else:
                     print(f"  {Color.GREEN}OK{Color.RESET} rebased")
@@ -277,7 +395,8 @@ def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
             # Try fast-forward merge (default, safe)
             result = run_git(["merge", "--ff-only", f"origin/{wt.branch}"], cwd=wt.path)
             if result.returncode == 0:
-                if "Already up to date" in result.stdout:
+                head_after = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
+                if head_before == head_after:
                     print(f"  {Color.GREEN}OK{Color.RESET} already up to date")
                 else:
                     print(f"  {Color.GREEN}OK{Color.RESET} fast-forwarded")
@@ -292,13 +411,29 @@ def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
     return 2 if fail_count > 0 else 0
 
 
-def cmd_list(bare_repo: Path) -> int:
+def cmd_list(bare_repo: Path, json_output: bool = False) -> int:
     """List all worktrees."""
     worktrees = get_worktrees(bare_repo)
 
     if not worktrees:
-        print("No worktrees found.")
+        if json_output:
+            print(json.dumps([]))
+        else:
+            print("No worktrees found.")
         return 1
+
+    if json_output:
+        items = [
+            {
+                "branch": wt.branch,
+                "path": str(wt.path),
+                "commit": wt.commit,
+                "detached": wt.is_detached,
+            }
+            for wt in worktrees
+        ]
+        print(json.dumps(items, indent=2))
+        return 0
 
     max_branch_len = max(len(wt.branch) for wt in worktrees)
     for wt in worktrees:
@@ -338,6 +473,11 @@ def cmd_upstream(bare_repo: Path) -> int:
 
     for wt in worktrees:
         print(f"==> {wt.branch}")
+
+        if wt.is_detached:
+            print(f"  {Color.YELLOW}SKIP{Color.RESET} detached HEAD")
+            skip_count += 1
+            continue
 
         if has_upstream(wt):
             print(f"  {Color.BLUE}SKIP{Color.RESET} upstream already set")
@@ -466,11 +606,14 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
     print(f"  {Color.GREEN}OK{Color.RESET} created worktree: {default_branch}/")
 
     # Set upstream for default branch
-    run_git(
+    up_result = run_git(
         ["branch", "--set-upstream-to", f"origin/{default_branch}", default_branch],
         cwd=default_wt_path,
     )
-    print(f"  {Color.GREEN}OK{Color.RESET} set upstream to origin/{default_branch}")
+    if up_result.returncode != 0:
+        print(f"  {Color.YELLOW}WARN{Color.RESET} failed to set upstream for {default_branch}")
+    else:
+        print(f"  {Color.GREEN}OK{Color.RESET} set upstream to origin/{default_branch}")
 
     # Step 4: Create common branch worktrees (main, master, staging)
     common_branches = ["main", "master", "staging"]
@@ -496,10 +639,12 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
         else:
             print(f"  {Color.GREEN}OK{Color.RESET} created worktree: {branch}/")
             # Set upstream
-            run_git(
+            up_result = run_git(
                 ["branch", "--set-upstream-to", f"origin/{branch}", branch],
                 cwd=wt_path,
             )
+            if up_result.returncode != 0:
+                print(f"  {Color.YELLOW}WARN{Color.RESET} failed to set upstream for {branch}")
             created_branches.add(branch)
 
     if len(created_branches) == 1:
@@ -531,11 +676,14 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
             else:
                 print(f"  {Color.GREEN}OK{Color.RESET} created worktree: {wt_path.name}/")
                 # Set upstream
-                run_git(
+                up_result = run_git(
                     ["branch", "--set-upstream-to", f"origin/{branch}", branch],
                     cwd=wt_path,
                 )
-                print(f"  {Color.GREEN}OK{Color.RESET} set upstream to origin/{branch}")
+                if up_result.returncode != 0:
+                    print(f"  {Color.YELLOW}WARN{Color.RESET} failed to set upstream for {branch}")
+                else:
+                    print(f"  {Color.GREEN}OK{Color.RESET} set upstream to origin/{branch}")
                 created_branches.add(branch)
 
     # Summary
@@ -631,11 +779,14 @@ def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool, base: 
 
     # Set upstream if remote exists
     if remote_exists:
-        run_git(
+        up_result = run_git(
             ["branch", "--set-upstream-to", f"origin/{branch}", branch],
             cwd=wt_path,
         )
-        print(f"{Color.GREEN}OK{Color.RESET} set upstream to origin/{branch}")
+        if up_result.returncode != 0:
+            print(f"{Color.YELLOW}WARN{Color.RESET} failed to set upstream for {branch}")
+        else:
+            print(f"{Color.GREEN}OK{Color.RESET} set upstream to origin/{branch}")
     elif create:
         # New branch created, no remote yet
         print()
@@ -708,6 +859,7 @@ def cmd_remove(
     dry_run: bool = False,
     delete_branch: bool = False,
     delete_remote: bool = False,
+    yes: bool = False,
 ) -> int:
     """Remove worktrees by identifier(s) or glob pattern(s)."""
     worktrees = get_worktrees(bare_repo)
@@ -777,6 +929,17 @@ def cmd_remove(
         print()
         print(f"{Color.GREEN}OK{Color.RESET} dry run complete (no changes made)")
         return 0
+
+    # Confirmation prompt unless --yes is passed
+    if not yes:
+        try:
+            answer = input(f"\nProceed with removal of {len(target_list)} worktree(s)? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            return 1
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Aborted.")
+            return 1
 
     print()
 
@@ -866,6 +1029,8 @@ def _remote_branch_completer(prefix: str, **kwargs) -> list[str]:
 
 
 def main() -> int:
+    Color.init()
+
     parser = argparse.ArgumentParser(
         prog="wt",
         description="Git worktree management CLI - manage multiple worktrees from anywhere",
@@ -936,9 +1101,20 @@ def main() -> int:
         action="store_true",
         help="Also delete remote branch (requires -b/--branch)",
     )
+    rm_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompt",
+    )
 
     # Existing commands
-    subparsers.add_parser("status", aliases=["st"], help="Show status of all worktrees")
+    status_parser = subparsers.add_parser(
+        "status", aliases=["st"], help="Show status of all worktrees"
+    )
+    status_parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output in JSON format"
+    )
     subparsers.add_parser(
         "fetch", aliases=["f"], help="Fetch all remotes (git fetch --all --prune)"
     )
@@ -949,9 +1125,16 @@ def main() -> int:
         action="store_true",
         help="Use rebase instead of fast-forward merge",
     )
-    subparsers.add_parser("list", aliases=["ls"], help="List all worktrees")
+    list_parser = subparsers.add_parser("list", aliases=["ls"], help="List all worktrees")
+    list_parser.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output in JSON format"
+    )
     subparsers.add_parser(
         "upstream", aliases=["up"], help="Set upstream to origin/<branch> for all worktrees"
+    )
+    prune_parser = subparsers.add_parser("prune", help="Remove stale worktree references")
+    prune_parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be pruned without removing"
     )
 
     # Enable shell tab-completion when argcomplete is installed.
@@ -986,15 +1169,17 @@ def main() -> int:
     print()
 
     if args.command in ("status", "st"):
-        return cmd_status(bare_repo)
+        return cmd_status(bare_repo, json_output=args.json_output)
     elif args.command in ("fetch", "f"):
         return cmd_fetch(bare_repo)
     elif args.command in ("pull", "p"):
         return cmd_pull(bare_repo, args.rebase)
     elif args.command in ("list", "ls"):
-        return cmd_list(bare_repo)
+        return cmd_list(bare_repo, json_output=args.json_output)
     elif args.command in ("upstream", "up"):
         return cmd_upstream(bare_repo)
+    elif args.command == "prune":
+        return cmd_prune(bare_repo, dry_run=args.dry_run)
     elif args.command in ("add", "a"):
         return cmd_add(bare_repo, args.branch, args.path, args.create, args.base)
     elif args.command in ("remove", "rm"):
@@ -1009,6 +1194,7 @@ def main() -> int:
             args.dry_run,
             args.branch,
             args.remote,
+            args.yes,
         )
 
     return 0
