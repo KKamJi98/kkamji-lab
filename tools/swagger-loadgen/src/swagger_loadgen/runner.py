@@ -17,6 +17,7 @@ class RequestResult:
 
     url: str
     path: str
+    source_name: str
     status: int
     latency_ms: float
     error: str | None = None
@@ -108,6 +109,7 @@ async def run_load(
                 result = RequestResult(
                     url=url,
                     path=ep.path,
+                    source_name=ep.source_name,
                     status=resp.status_code,
                     latency_ms=latency,
                 )
@@ -116,6 +118,7 @@ async def run_load(
                 result = RequestResult(
                     url=url,
                     path=ep.path,
+                    source_name=ep.source_name,
                     status=0,
                     latency_ms=latency,
                     error=str(exc),

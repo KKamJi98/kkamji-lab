@@ -18,15 +18,16 @@ async def stream_results(queue: asyncio.Queue[RequestResult]) -> None:
     """Print each request result as it arrives."""
     while True:
         result = await queue.get()
+        label = f"[{result.source_name}]"
         if result.error:
             console.print(
-                f"  GET {result.path}  [red]{result.error}[/red]  "
+                f"  {label} GET {result.path}  [red]{result.error}[/red]  "
                 f"{result.latency_ms:.0f}ms"
             )
         else:
             color = "green" if result.status < 400 else "yellow"
             console.print(
-                f"  GET {result.path}  [{color}]{result.status}[/{color}]  "
+                f"  {label} GET {result.path}  [{color}]{result.status}[/{color}]  "
                 f"{result.latency_ms:.0f}ms"
             )
         queue.task_done()
@@ -72,26 +73,55 @@ def print_summary(stats: RunStats) -> None:
     console.print(overview)
 
     # Per-endpoint breakdown
-    by_path: dict[str, list[RequestResult]] = defaultdict(list)
+    by_definition: dict[str, list[RequestResult]] = defaultdict(list)
+    by_path: dict[tuple[str, str], list[RequestResult]] = defaultdict(list)
     for r in stats.results:
-        by_path[r.path].append(r)
+        by_definition[r.source_name].append(r)
+        by_path[(r.source_name, r.path)].append(r)
+
+    if by_definition:
+        console.print()
+        src_table = Table(title="Per-Definition Stats")
+        src_table.add_column("Definition")
+        src_table.add_column("Count", justify="right")
+        src_table.add_column("Success %", justify="right")
+        src_table.add_column("Avg (ms)", justify="right")
+        src_table.add_column("p95 (ms)", justify="right")
+
+        for source_name, results in sorted(by_definition.items()):
+            count = len(results)
+            ok = sum(1 for r in results if r.error is None and r.status < 400)
+            lats = sorted(r.latency_ms for r in results)
+            avg = statistics.mean(lats) if lats else 0
+            src_p95 = _percentile(lats, 95)
+            src_table.add_row(
+                source_name,
+                str(count),
+                f"{ok / count * 100:.0f}%",
+                f"{avg:.1f}",
+                f"{src_p95:.1f}",
+            )
+
+        console.print(src_table)
 
     if len(by_path) > 1:
         console.print()
         ep_table = Table(title="Per-Endpoint Stats")
+        ep_table.add_column("Definition")
         ep_table.add_column("Path")
         ep_table.add_column("Count", justify="right")
         ep_table.add_column("Success %", justify="right")
         ep_table.add_column("Avg (ms)", justify="right")
         ep_table.add_column("p95 (ms)", justify="right")
 
-        for path, results in sorted(by_path.items()):
+        for (source_name, path), results in sorted(by_path.items()):
             count = len(results)
             ok = sum(1 for r in results if r.error is None and r.status < 400)
             lats = sorted(r.latency_ms for r in results)
             avg = statistics.mean(lats) if lats else 0
             ep_p95 = _percentile(lats, 95)
             ep_table.add_row(
+                source_name,
                 path,
                 str(count),
                 f"{ok / count * 100:.0f}%",
