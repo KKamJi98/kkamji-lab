@@ -941,6 +941,10 @@ def cmd_remove(
             print("Aborted.")
             return 1
 
+    # Fetch before branch deletion so local knows about remote merges
+    if delete_branch:
+        run_git(["fetch", "--all", "--prune"], cwd=bare_repo)
+
     print()
 
     ok_count = 0
@@ -978,7 +982,49 @@ def cmd_remove(
         if delete_branch and wt.branch and not wt.branch.startswith("(detached"):
             delete_flag = "-D" if force else "-d"
             br_result = run_git(["branch", delete_flag, wt.branch], cwd=bare_repo)
-            if br_result.returncode != 0:
+            if br_result.returncode != 0 and not force:
+                # Safe delete failed — check if branch was merged on remote
+                run_git(["fetch", "--prune"], cwd=bare_repo)
+                merged = run_git(
+                    ["branch", "-r", "--merged", "origin/HEAD"],
+                    cwd=bare_repo,
+                )
+                remote_ref = f"origin/{wt.branch}"
+                if remote_ref in merged.stdout:
+                    # Merged on remote but local base not updated — force delete
+                    br_result = run_git(["branch", "-D", wt.branch], cwd=bare_repo)
+                    if br_result.returncode == 0:
+                        print(
+                            f"  {Color.GREEN}OK{Color.RESET} deleted local branch {wt.branch}"
+                            " (merged on remote)"
+                        )
+                    else:
+                        print(
+                            f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}"
+                        )
+                else:
+                    # Also check if remote branch no longer exists (already deleted after merge)
+                    remote_exists = run_git(
+                        ["ls-remote", "--heads", "origin", wt.branch],
+                        cwd=bare_repo,
+                    )
+                    if not remote_exists.stdout.strip():
+                        br_result = run_git(["branch", "-D", wt.branch], cwd=bare_repo)
+                        if br_result.returncode == 0:
+                            print(
+                                f"  {Color.GREEN}OK{Color.RESET} deleted local branch {wt.branch}"
+                                " (remote branch gone)"
+                            )
+                        else:
+                            print(
+                                f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}"
+                            )
+                    else:
+                        print(
+                            f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
+                            " (branch exists on remote but not merged)"
+                        )
+            elif br_result.returncode != 0:
                 print(f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}")
             else:
                 print(f"  {Color.GREEN}OK{Color.RESET} deleted local branch {wt.branch}")
