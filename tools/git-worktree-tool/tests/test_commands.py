@@ -547,6 +547,144 @@ class TestCmdRemove:
         assert result == 1
         assert "No matching worktrees" in capsys.readouterr().out
 
+    def test_remove_delete_branch_does_not_use_substring_remote_match(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/a"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        cli.Color.init()
+
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run_git(args, cwd=None):
+            calls.append(tuple(args))
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "feat/a"]:
+                return _fail(stderr="error: The branch 'feat/a' is not fully merged.")
+            if args == ["fetch", "--prune"]:
+                return _ok()
+            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+                return _ok(stdout="  origin/feat/ab\n")
+            if args == ["merge-base", "--is-ancestor", "feat/a", "origin/HEAD"]:
+                return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+            if args == ["ls-remote", "--heads", "origin", "feat/a"]:
+                return _ok(stdout="deadbeef\trefs/heads/feat/a\n")
+            if args == ["branch", "-D", "feat/a"]:
+                raise AssertionError("force delete must not run for substring remote match")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/a"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 2
+        output = capsys.readouterr().out
+        assert "branch exists on remote but not merged" in output
+        assert "Summary: ok=1 skip=0 fail=1" in output
+        assert ("branch", "-D", "feat/a") not in calls
+
+    def test_remove_delete_branch_ls_remote_failure_blocks_force_delete(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/auth"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        cli.Color.init()
+
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run_git(args, cwd=None):
+            calls.append(tuple(args))
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "feat/auth"]:
+                return _fail(stderr="error: The branch 'feat/auth' is not fully merged.")
+            if args == ["fetch", "--prune"]:
+                return _ok()
+            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "feat/auth", "origin/HEAD"]:
+                return _ok()
+            if args == ["ls-remote", "--heads", "origin", "feat/auth"]:
+                return _fail(stderr="fatal: Authentication failed for 'origin'")
+            if args == ["branch", "-D", "feat/auth"]:
+                raise AssertionError("force delete must not run when ls-remote fails")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/auth"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 2
+        output = capsys.readouterr().out
+        assert "unable to verify remote branch state" in output
+        assert "Summary: ok=1 skip=0 fail=1" in output
+        assert ("branch", "-D", "feat/auth") not in calls
+
+    def test_remove_delete_branch_ancestry_check_failure_returns_partial_failure(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/cache"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        cli.Color.init()
+
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run_git(args, cwd=None):
+            calls.append(tuple(args))
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "feat/cache"]:
+                return _fail(stderr="error: The branch 'feat/cache' is not fully merged.")
+            if args == ["fetch", "--prune"]:
+                return _ok()
+            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "feat/cache", "origin/HEAD"]:
+                return _fail(stderr="fatal: Not a valid object name origin/HEAD")
+            if args == ["ls-remote", "--heads", "origin", "feat/cache"]:
+                raise AssertionError("ls-remote must not run when ancestry check fails")
+            if args == ["branch", "-D", "feat/cache"]:
+                raise AssertionError("force delete must not run when ancestry check fails")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/cache"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 2
+        output = capsys.readouterr().out
+        assert "unable to verify ancestry against origin/HEAD" in output
+        assert "Summary: ok=1 skip=0 fail=1" in output
+        assert ("branch", "-D", "feat/cache") not in calls
+
 
 # ────────────────────────── Caching behavior ──────────────────────────
 

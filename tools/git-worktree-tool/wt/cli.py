@@ -990,8 +990,29 @@ def cmd_remove(
                     cwd=bare_repo,
                 )
                 remote_ref = f"origin/{wt.branch}"
-                if remote_ref in merged.stdout:
-                    # Merged on remote but local base not updated — force delete
+                merged_refs = set()
+                if merged.returncode == 0:
+                    merged_refs = {
+                        line.strip().removeprefix("* ").strip()
+                        for line in merged.stdout.splitlines()
+                        if line.strip()
+                    }
+                remote_merged = remote_ref in merged_refs
+
+                # Force delete is allowed only when local branch tip is already part of origin/HEAD.
+                local_ancestor = run_git(
+                    ["merge-base", "--is-ancestor", wt.branch, "origin/HEAD"],
+                    cwd=bare_repo,
+                )
+                if local_ancestor.returncode not in (0, 1):
+                    print(
+                        f"  {Color.RED}FAIL{Color.RESET} branch delete:"
+                        " unable to verify ancestry against origin/HEAD"
+                    )
+                    if local_ancestor.stderr.strip():
+                        print(f"    {local_ancestor.stderr.strip()}")
+                    fail_count += 1
+                elif remote_merged and local_ancestor.returncode == 0:
                     br_result = run_git(["branch", "-D", wt.branch], cwd=bare_repo)
                     if br_result.returncode == 0:
                         print(
@@ -1002,30 +1023,54 @@ def cmd_remove(
                         print(
                             f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}"
                         )
+                        fail_count += 1
+                elif remote_merged:
+                    print(
+                        f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
+                        " (local branch has commits not in origin/HEAD)"
+                    )
+                    fail_count += 1
                 else:
-                    # Also check if remote branch no longer exists (already deleted after merge)
+                    # Check whether remote branch is deleted, but only trust ls-remote on success.
                     remote_exists = run_git(
                         ["ls-remote", "--heads", "origin", wt.branch],
                         cwd=bare_repo,
                     )
-                    if not remote_exists.stdout.strip():
+                    if remote_exists.returncode != 0:
+                        print(
+                            f"  {Color.RED}FAIL{Color.RESET} branch delete:"
+                            " unable to verify remote branch state"
+                        )
+                        if remote_exists.stderr.strip():
+                            print(f"    {remote_exists.stderr.strip()}")
+                        fail_count += 1
+                    elif not remote_exists.stdout.strip() and local_ancestor.returncode == 0:
                         br_result = run_git(["branch", "-D", wt.branch], cwd=bare_repo)
                         if br_result.returncode == 0:
                             print(
                                 f"  {Color.GREEN}OK{Color.RESET} deleted local branch {wt.branch}"
-                                " (remote branch gone)"
+                                " (remote branch gone, local merged)"
                             )
                         else:
                             print(
                                 f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}"
                             )
+                            fail_count += 1
+                    elif not remote_exists.stdout.strip():
+                        print(
+                            f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
+                            " (remote branch gone, local commits not in origin/HEAD)"
+                        )
+                        fail_count += 1
                     else:
                         print(
                             f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
                             " (branch exists on remote but not merged)"
                         )
+                        fail_count += 1
             elif br_result.returncode != 0:
                 print(f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}")
+                fail_count += 1
             else:
                 print(f"  {Color.GREEN}OK{Color.RESET} deleted local branch {wt.branch}")
 
@@ -1034,6 +1079,7 @@ def cmd_remove(
                 rr = run_git(["push", "origin", "--delete", wt.branch], cwd=bare_repo)
                 if rr.returncode != 0:
                     print(f"  {Color.RED}FAIL{Color.RESET} remote delete: {rr.stderr.strip()}")
+                    fail_count += 1
                 else:
                     print(
                         f"  {Color.GREEN}OK{Color.RESET} deleted remote branch origin/{wt.branch}"
