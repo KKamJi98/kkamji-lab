@@ -1159,7 +1159,11 @@ def main() -> int:
     ).completer = _remote_branch_completer
 
     # remove command
-    rm_parser = subparsers.add_parser("remove", aliases=["rm"], help="Remove a worktree")
+    rm_parser = subparsers.add_parser(
+        "remove",
+        aliases=["rm"],
+        help="Remove a worktree (keeps local branch unless -b)",
+    )
     rm_parser.add_argument(
         "identifier",
         nargs="*",
@@ -1186,7 +1190,7 @@ def main() -> int:
         "-b",
         "--branch",
         action="store_true",
-        help="Delete local branch after removing worktree",
+        help="Also delete the local branch after removing the worktree",
     )
     rm_parser.add_argument(
         "--remote",

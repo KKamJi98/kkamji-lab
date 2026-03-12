@@ -6,7 +6,7 @@ Git worktree 구조의 bare repository를 관리하는 CLI 도구입니다.
 ## Features
 
 - **wt init**: bare repository 초기 설정 자동화
-- **wt add/remove**: worktree 추가/삭제 (복수/패턴 삭제 지원)
+- **wt add/remove**: worktree 추가/삭제 (`wt rm`은 기본적으로 worktree만 삭제, 복수/패턴 삭제 지원)
 - **wt status**: 모든 worktree의 상태 (clean/dirty, sync 상태) 확인
 - **wt fetch**: bare repo에서 `git fetch --all --prune` 실행
 - **wt pull**: fetch 후 모든 worktree를 동기화 (기본 ff-only, `--rebase` 옵션)
@@ -64,8 +64,14 @@ wt add feat/my-feature -c
 # 특정 브랜치 기반으로 새 브랜치 생성 (예: staging에서 분기)
 wt add chore/test123 -c --base staging
 
-# worktree 삭제
+# worktree만 삭제 (로컬 브랜치는 유지)
 wt remove staging
+
+# worktree + 로컬 브랜치 삭제
+wt remove feat/my-feature -b
+
+# worktree + 로컬 브랜치 + 원격 브랜치 삭제
+wt remove feat/my-feature -b --remote
 
 # 여러 worktree 한 번에 삭제
 wt remove provider exemplars
@@ -79,6 +85,10 @@ wt remove --match "feat/*" --dry-run
 # 강제 삭제 (dirty 상태여도)
 wt remove staging -f
 ```
+
+`wt remove`는 기본적으로 worktree entry와 디렉토리만 제거합니다.
+로컬 브랜치까지 같이 정리하려면 `-b/--branch`를 명시적으로 사용하세요.
+원격 브랜치까지 삭제하려면 `--remote`를 함께 사용하되, `--remote`는 `-b/--branch`가 필요합니다.
 
 ### 새 원격 브랜치를 worktree로 추가
 
@@ -241,7 +251,7 @@ git worktree add ../staging staging
 |---------|-------|-------------|
 | `wt init <url> [path]` | - | 새 bare repo + worktree 초기화 |
 | `wt add <branch>` | `a` | worktree 추가 |
-| `wt remove <identifier...> [--match <glob>] [--dry-run]` | `rm` | worktree 삭제 (복수/패턴 지원) |
+| `wt remove <identifier...> [--match <glob>] [--dry-run]` | `rm` | worktree 삭제, 로컬 브랜치는 기본 유지 (`-b`로 함께 삭제) |
 | `wt status` | `st` | 모든 worktree 상태 확인 |
 | `wt fetch` | `f` | `git fetch --all --prune` |
 | `wt pull` | `p` | fetch + ff-only (기본) |
