@@ -685,6 +685,102 @@ class TestCmdRemove:
         assert "Summary: ok=1 skip=0 fail=1" in output
         assert ("branch", "-D", "feat/cache") not in calls
 
+    def test_remove_squash_merged_branch_deleted_successfully(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """Squash-merged branch (remote gone, local not ancestor) should be force-deleted."""
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/TECH-4177"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        cli.Color.init()
+
+        TREE_SHA = "aabbccdd"
+
+        def fake_run_git(args, cwd=None):
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "feat/TECH-4177"]:
+                return _fail(stderr="error: not fully merged")
+            if args == ["fetch", "--prune"]:
+                return _ok()
+            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "feat/TECH-4177", "origin/HEAD"]:
+                return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+            if args == ["ls-remote", "--heads", "origin", "feat/TECH-4177"]:
+                return _ok(stdout="")
+            if args == ["merge-tree", "--write-tree", "origin/HEAD", "feat/TECH-4177"]:
+                return _ok(stdout=TREE_SHA)
+            if args == ["rev-parse", "origin/HEAD^{tree}"]:
+                return _ok(stdout=TREE_SHA)
+            if args == ["branch", "-D", "feat/TECH-4177"]:
+                return _ok()
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/TECH-4177"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 0
+        output = capsys.readouterr().out
+        assert "squash-merged" in output
+        assert "FAIL" not in output
+
+    def test_remove_squash_merge_detection_negative_still_fails(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """When merge-tree shows divergent trees, branch delete should still fail."""
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/diverged"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        cli.Color.init()
+
+        def fake_run_git(args, cwd=None):
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "feat/diverged"]:
+                return _fail(stderr="error: not fully merged")
+            if args == ["fetch", "--prune"]:
+                return _ok()
+            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "feat/diverged", "origin/HEAD"]:
+                return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+            if args == ["ls-remote", "--heads", "origin", "feat/diverged"]:
+                return _ok(stdout="")
+            if args == ["merge-tree", "--write-tree", "origin/HEAD", "feat/diverged"]:
+                return _ok(stdout="aaaa1111")
+            if args == ["rev-parse", "origin/HEAD^{tree}"]:
+                return _ok(stdout="bbbb2222")
+            if args == ["branch", "-D", "feat/diverged"]:
+                raise AssertionError("force delete must not run when not squash-merged")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/diverged"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 2
+        output = capsys.readouterr().out
+        assert "not fully merged" in output
+        assert "remote branch gone, local commits not in origin/HEAD" in output
+
 
 # ────────────────────────── Caching behavior ──────────────────────────
 

@@ -459,6 +459,27 @@ def has_local_branch(bare_repo: Path, branch: str) -> bool:
     return bool(result.stdout.strip())
 
 
+def _is_squash_merged(branch: str, target: str, bare_repo: Path) -> bool:
+    """Detect if branch was squash/rebase-merged into target.
+
+    Uses ``git merge-tree --write-tree`` (Git 2.38+) to simulate merging
+    *branch* into *target*.  If the resulting tree is identical to *target*'s
+    current tree, every change from *branch* is already incorporated — which
+    is exactly what happens after a squash or rebase merge on GitHub.
+    """
+    result = run_git(
+        ["merge-tree", "--write-tree", target, branch],
+        cwd=bare_repo,
+    )
+    if result.returncode != 0:
+        return False
+    merge_tree = result.stdout.strip().split("\n")[0]
+    target_tree = run_git(["rev-parse", f"{target}^{{tree}}"], cwd=bare_repo)
+    if target_tree.returncode != 0:
+        return False
+    return merge_tree == target_tree.stdout.strip()
+
+
 def cmd_upstream(bare_repo: Path) -> int:
     """Set upstream to origin/<branch> for all worktrees missing upstream."""
     worktrees = get_worktrees(bare_repo)
@@ -1057,11 +1078,27 @@ def cmd_remove(
                             )
                             fail_count += 1
                     elif not remote_exists.stdout.strip():
-                        print(
-                            f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
-                            " (remote branch gone, local commits not in origin/HEAD)"
-                        )
-                        fail_count += 1
+                        # Remote branch gone, local not ancestor of origin/HEAD.
+                        # Common with squash/rebase merge — try merge-tree detection.
+                        if _is_squash_merged(wt.branch, "origin/HEAD", bare_repo):
+                            br_result = run_git(["branch", "-D", wt.branch], cwd=bare_repo)
+                            if br_result.returncode == 0:
+                                print(
+                                    f"  {Color.GREEN}OK{Color.RESET} deleted local branch"
+                                    f" {wt.branch} (squash-merged)"
+                                )
+                            else:
+                                print(
+                                    f"  {Color.RED}FAIL{Color.RESET} branch delete:"
+                                    f" {br_result.stderr.strip()}"
+                                )
+                                fail_count += 1
+                        else:
+                            print(
+                                f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
+                                " (remote branch gone, local commits not in origin/HEAD)"
+                            )
+                            fail_count += 1
                     else:
                         print(
                             f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
