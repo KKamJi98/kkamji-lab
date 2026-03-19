@@ -723,12 +723,12 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
 
 
 def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool, base: str | None) -> int:
-    """Add a new worktree for a branch."""
-    # Validate: --base requires --create
-    if base and not create:
-        print(f"{Color.RED}Error:{Color.RESET} --base requires --create (-c) flag")
-        return 1
+    """Add a new worktree for a branch.
 
+    When neither local nor remote branch exists, the branch is created
+    automatically (as if ``-c`` were given).  The ``--base`` flag can be
+    used with or without ``-c`` to specify the starting point.
+    """
     # Determine worktree path
     if path is None:
         # Use branch name, replacing / with -
@@ -737,19 +737,28 @@ def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool, base: 
     else:
         wt_path = Path(path).resolve()
 
-    print(f"Adding worktree for branch: {branch}")
-    print(f"  Path: {wt_path}")
-    if base:
-        print(f"  Base: {base}")
-    print()
-
     # Check if worktree path already exists
     if wt_path.exists():
         print(f"{Color.RED}Error:{Color.RESET} Path '{wt_path}' already exists.")
         return 1
 
-    # Check if remote branch exists (for tracking)
+    # Check if remote/local branch exists
     remote_exists = has_remote_branch(bare_repo, branch)
+    local_exists = has_local_branch(bare_repo, branch)
+
+    # Auto-create: if branch doesn't exist anywhere and -c not given, enable create mode
+    if not create and not remote_exists and not local_exists:
+        create = True
+        print(
+            f"{Color.YELLOW}Note:{Color.RESET} Branch '{branch}' does not exist."
+            " Creating new branch."
+        )
+
+    print(f"Adding worktree for branch: {branch}")
+    print(f"  Path: {wt_path}")
+    if base:
+        print(f"  Base: {base}")
+    print()
 
     if create:
         # Create new branch and worktree
@@ -777,8 +786,6 @@ def cmd_add(bare_repo: Path, branch: str, path: str | None, create: bool, base: 
             )
     else:
         # Checkout existing branch
-        local_exists = has_local_branch(bare_repo, branch)
-
         if remote_exists and not local_exists:
             # Remote exists but local doesn't - create tracking branch
             result = run_git(
@@ -1192,7 +1199,7 @@ def main() -> int:
     add_parser.add_argument(
         "-b",
         "--base",
-        help="Base branch to create new branch from (requires -c)",
+        help="Base branch to create new branch from",
     ).completer = _remote_branch_completer
 
     # remove command

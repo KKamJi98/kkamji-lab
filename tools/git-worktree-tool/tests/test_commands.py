@@ -378,15 +378,64 @@ class TestCmdAdd:
         assert result == 0
         assert "origin/main" in worktree_add_args
 
-    def test_add_base_without_create_fails(self, tmp_path, capsys) -> None:
+    def test_add_auto_create_when_branch_not_exists(self, tmp_path, monkeypatch, capsys) -> None:
+        """Branch that doesn't exist locally or remotely should be auto-created."""
         bare_repo = tmp_path / ".bare"
         bare_repo.mkdir()
+
+        worktree_add_args = []
+
+        def fake_run_git(args, cwd=None):
+            if args[:2] == ["branch", "-r"]:
+                return _ok(stdout="")  # no remote branch
+            if args[:2] == ["branch", "--list"]:
+                return _ok(stdout="")  # no local branch
+            if args[:2] == ["worktree", "add"]:
+                worktree_add_args.extend(args)
+                Path(args[-1]).mkdir(parents=True, exist_ok=True)
+                return _ok()
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
         cli.Color.init()
 
-        result = cli.cmd_add(bare_repo, "feat/x", None, create=False, base="main")
+        result = cli.cmd_add(bare_repo, "feat/new-thing", None, create=False, base=None)
 
-        assert result == 1
-        assert "--base requires --create" in capsys.readouterr().out
+        assert result == 0
+        output = capsys.readouterr().out
+        assert "does not exist" in output
+        assert "Creating new branch" in output
+        assert "-b" in worktree_add_args  # should use -b to create
+
+    def test_add_base_without_create_auto_creates(self, tmp_path, monkeypatch, capsys) -> None:
+        """--base without -c should auto-create when branch doesn't exist."""
+        bare_repo = tmp_path / ".bare"
+        bare_repo.mkdir()
+
+        worktree_add_args = []
+
+        def fake_run_git(args, cwd=None):
+            if args[:2] == ["branch", "-r"]:
+                # Only match exact "origin/staging", not "origin/feat/from-staging"
+                if args == ["branch", "-r", "--list", "origin/staging"]:
+                    return _ok(stdout="  origin/staging\n")
+                return _ok(stdout="")
+            if args[:2] == ["branch", "--list"]:
+                return _ok(stdout="")
+            if args[:2] == ["worktree", "add"]:
+                worktree_add_args.extend(args)
+                wt_path = args[3] if "-b" in args else args[2]
+                Path(wt_path).mkdir(parents=True, exist_ok=True)
+                return _ok()
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+        cli.Color.init()
+
+        result = cli.cmd_add(bare_repo, "feat/from-staging", None, create=False, base="staging")
+
+        assert result == 0
+        assert "origin/staging" in worktree_add_args
 
     def test_add_path_already_exists(self, tmp_path, monkeypatch, capsys) -> None:
         bare_repo = tmp_path / ".bare"
