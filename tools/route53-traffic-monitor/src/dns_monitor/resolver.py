@@ -9,6 +9,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
+import dns.exception
 import dns.message
 import dns.query
 import dns.rdatatype
@@ -39,7 +40,7 @@ class WeightedResolver:
                 answers = default_resolver.resolve(ns, "A")
                 for rdata in answers:
                     ns_ips.append(str(rdata))
-            except dns.resolver.DNSException:
+            except dns.exception.DNSException:
                 continue
 
         if not ns_ips:
@@ -71,7 +72,7 @@ class WeightedResolver:
                 for rdata in rrset:
                     ips.append(str(rdata).rstrip("."))
             return ips
-        except Exception:
+        except (dns.exception.DNSException, OSError):
             return []
 
 
@@ -125,7 +126,7 @@ def resolve_alias_targets(
             try:
                 answers = resolver.resolve(alias_dns, "A")
                 ips = [str(rdata) for rdata in answers]
-            except dns.resolver.DNSException:
+            except dns.exception.DNSException:
                 result.warnings.append(f"{rec.set_identifier}: {alias_dns} 리졸브 실패")
             result.targets[rec.set_identifier] = AliasTarget(
                 set_identifier=rec.set_identifier,

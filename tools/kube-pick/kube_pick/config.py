@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import yaml
 from rich.console import Console
 from rich.table import Table
 
@@ -38,6 +39,16 @@ def list_kubeconfig_files() -> list[Path]:
         if "config" in name:
             # Exclude backup files
             if not any(name.endswith(ext) for ext in [".bak", ".backup", ".old", ".tmp"]):
+                # Validate that the file is a readable kubeconfig (YAML with "clusters" key)
+                try:
+                    with open(item) as f:
+                        data = yaml.safe_load(f)
+                    if not isinstance(data, dict) or "clusters" not in data:
+                        logger.debug(f"Skipping {item.name}: not a valid kubeconfig")
+                        continue
+                except (yaml.YAMLError, OSError) as e:
+                    logger.debug(f"Skipping {item.name}: {e}")
+                    continue
                 configs.append(item)
 
     return sorted(configs, key=lambda p: p.name)

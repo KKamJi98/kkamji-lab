@@ -1,5 +1,7 @@
 """AWS 리소스 추적 핵심 로직."""
 
+import ipaddress
+import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -14,6 +16,8 @@ from .aws_clients import (
     get_elbv2_client,
     get_route53_client,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RecordType(Enum):
@@ -151,10 +155,11 @@ def trace_cloudfront(distribution_dns: str) -> dict[str, Any]:
     paginator = client.get_paginator("list_distributions")
 
     for page in paginator.paginate():
-        if "DistributionList" not in page or "Items" not in page["DistributionList"]:
+        dist_list = page.get("DistributionList")
+        if not dist_list:
             continue
-
-        for dist in page["DistributionList"]["Items"]:
+        items = dist_list.get("Items") or []
+        for dist in items:
             if dist["DomainName"].lower() == distribution_dns.lower():
                 result["distribution_id"] = dist["Id"]
                 result["status"] = dist["Status"]
@@ -361,8 +366,30 @@ def trace_load_balancer(lb_dns: str, region: str | None = None) -> dict[str, Any
 
                     return result
 
-    except ClientError:
-        pass
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        msg = e.response["Error"]["Message"]
+        if code in ("AccessDeniedException", "AccessDenied", "UnauthorizedException"):
+            logger.warning(
+                "ALB/NLB 조회 권한 없음 (dns=%s, code=%s): %s",
+                lb_dns,
+                code,
+                msg,
+            )
+        elif code in ("Throttling", "ThrottlingException", "RequestLimitExceeded"):
+            logger.warning(
+                "ALB/NLB 조회 API 요청이 스로틀링됨 (dns=%s, code=%s): %s",
+                lb_dns,
+                code,
+                msg,
+            )
+        else:
+            logger.warning(
+                "ALB/NLB 조회 중 ClientError 발생 (dns=%s, code=%s): %s",
+                lb_dns,
+                code,
+                msg,
+            )
 
     # Classic ELB 조회
     elb = get_elb_client(region)
@@ -392,8 +419,30 @@ def trace_load_balancer(lb_dns: str, region: str | None = None) -> dict[str, Any
 
                 return result
 
-    except ClientError:
-        pass
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        msg = e.response["Error"]["Message"]
+        if code in ("AccessDeniedException", "AccessDenied", "UnauthorizedException"):
+            logger.warning(
+                "Classic ELB 조회 권한 없음 (dns=%s, code=%s): %s",
+                lb_dns,
+                code,
+                msg,
+            )
+        elif code in ("Throttling", "ThrottlingException", "RequestLimitExceeded"):
+            logger.warning(
+                "Classic ELB 조회 API 요청이 스로틀링됨 (dns=%s, code=%s): %s",
+                lb_dns,
+                code,
+                msg,
+            )
+        else:
+            logger.warning(
+                "Classic ELB 조회 중 ClientError 발생 (dns=%s, code=%s): %s",
+                lb_dns,
+                code,
+                msg,
+            )
 
     return result
 
@@ -810,8 +859,14 @@ def find_target_groups_for_ec2(
     elbv2 = get_elbv2_client(region)
     results: list[dict[str, Any]] = []
 
-    # 매칭할 IP 집합 생성
-    match_ips = set(all_private_ips) if all_private_ips else set()
+    # 매칭할 IP 집합 생성 (ipaddress로 정규화하여 "10.0.0.001" 같은 표기 차이를 무시)
+    def _normalize_ip(addr: str) -> str:
+        try:
+            return str(ipaddress.ip_address(addr))
+        except ValueError:
+            return addr
+
+    match_ips = {_normalize_ip(ip) for ip in all_private_ips} if all_private_ips else set()
 
     try:
         # 모든 Target Group 조회
@@ -824,8 +879,8 @@ def find_target_groups_for_ec2(
                 for target_health in health_resp["TargetHealthDescriptions"]:
                     target_id = target_health["Target"]["Id"]
 
-                    # Instance ID 또는 ENI의 모든 IP로 매칭 (Pod IP 포함)
-                    is_match = target_id == instance_id or target_id in match_ips
+                    # Instance ID 또는 ENI의 모든 IP로 매칭 (Pod IP 포함, IP 정규화 적용)
+                    is_match = target_id == instance_id or _normalize_ip(target_id) in match_ips
 
                     if is_match:
                         results.append(

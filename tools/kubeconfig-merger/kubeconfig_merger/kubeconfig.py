@@ -5,7 +5,10 @@ import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+MergeStrategy = Literal["last-wins", "skip", "error"]
+_VALID_STRATEGIES: tuple[str, ...] = ("last-wins", "skip", "error")
 
 try:
     import yaml  # PyYAML
@@ -184,12 +187,38 @@ def prompt_for_selection(configs: list[Path]) -> list[Path] | None:
         print("No valid selections.")
 
 
+class DuplicateEntryError(ValueError):
+    """Raised when a duplicate entry is found and strategy is 'error'."""
+
+
 def merge_named_list(
     items: Any,
     merged: dict[str, dict[str, Any]],
     unnamed: list[dict[str, Any]],
     duplicates: list[str],
+    kind: str = "entry",
+    strategy: MergeStrategy = "last-wins",
 ) -> None:
+    """Merge a named list (clusters/users/contexts) into *merged*.
+
+    Parameters
+    ----------
+    items:
+        Raw list from a kubeconfig section (clusters/users/contexts).
+    merged:
+        Accumulator dict keyed by entry name; mutated in place.
+    unnamed:
+        Accumulator list for entries that have no valid name.
+    duplicates:
+        Accumulator list that records duplicate names encountered.
+    kind:
+        Human-readable label used in warning messages (e.g. "cluster").
+    strategy:
+        How to handle duplicate names:
+        - ``"last-wins"`` (default): overwrite the previous entry and emit a WARNING.
+        - ``"skip"``: keep the first entry and silently skip subsequent duplicates.
+        - ``"error"``: raise :class:`DuplicateEntryError` immediately.
+    """
     if not isinstance(items, list):
         return
     for item in items:
@@ -198,14 +227,48 @@ def merge_named_list(
         name = item.get("name")
         if isinstance(name, str) and name.strip():
             if name in merged:
+                if strategy == "error":
+                    raise DuplicateEntryError(
+                        f"Duplicate {kind} name '{name}' found. "
+                        "Use --strategy last-wins or skip to suppress this error."
+                    )
+                if strategy == "skip":
+                    duplicates.append(name)
+                    continue
+                # last-wins: overwrite and warn
                 duplicates.append(name)
+                print(
+                    f"WARNING: duplicate {kind} '{name}' — "
+                    "overwriting previous entry with the later one."
+                )
                 merged.pop(name, None)
             merged[name] = item
         else:
             unnamed.append(item)
 
 
-def merge_kubeconfigs(configs: Iterable[dict[str, Any]]) -> MergeResult:
+def merge_kubeconfigs(
+    configs: Iterable[dict[str, Any]],
+    strategy: MergeStrategy = "last-wins",
+) -> MergeResult:
+    """Merge an ordered sequence of kubeconfig dicts into a single :class:`MergeResult`.
+
+    Parameters
+    ----------
+    configs:
+        Ordered sequence of parsed kubeconfig dicts (earlier = lower priority
+        for ``last-wins``).
+    strategy:
+        Duplicate-handling strategy forwarded to :func:`merge_named_list`.
+        - ``"last-wins"`` (default): later entry wins; a WARNING is printed.
+        - ``"skip"``: first entry wins; subsequent duplicates are ignored.
+        - ``"error"``: raises :class:`DuplicateEntryError` on the first duplicate.
+    """
+    if strategy not in _VALID_STRATEGIES:
+        raise ValueError(
+            f"Invalid strategy '{strategy}'. Must be one of: {', '.join(_VALID_STRATEGIES)}"
+        )
+
     merged_config: dict[str, Any] = {}
     cluster_map: dict[str, dict[str, Any]] = {}
     user_map: dict[str, dict[str, Any]] = {}
@@ -238,9 +301,30 @@ def merge_kubeconfigs(configs: Iterable[dict[str, Any]]) -> MergeResult:
                 continue
             merged_config[key] = value
 
-        merge_named_list(cfg.get("clusters", []), cluster_map, unnamed_clusters, duplicate_clusters)
-        merge_named_list(cfg.get("users", []), user_map, unnamed_users, duplicate_users)
-        merge_named_list(cfg.get("contexts", []), context_map, unnamed_contexts, duplicate_contexts)
+        merge_named_list(
+            cfg.get("clusters", []),
+            cluster_map,
+            unnamed_clusters,
+            duplicate_clusters,
+            kind="cluster",
+            strategy=strategy,
+        )
+        merge_named_list(
+            cfg.get("users", []),
+            user_map,
+            unnamed_users,
+            duplicate_users,
+            kind="user",
+            strategy=strategy,
+        )
+        merge_named_list(
+            cfg.get("contexts", []),
+            context_map,
+            unnamed_contexts,
+            duplicate_contexts,
+            kind="context",
+            strategy=strategy,
+        )
 
     if saw_clusters or cluster_map or unnamed_clusters:
         merged_config["clusters"] = list(cluster_map.values()) + unnamed_clusters

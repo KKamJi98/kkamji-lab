@@ -81,7 +81,12 @@ def load_env_vars() -> dict[str, object]:
         val = os.environ.get(env_key)
         if val is not None:
             if config_key == "tps":
-                result[config_key] = int(val)
+                try:
+                    result[config_key] = int(val)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid value for {env_key}: '{val}' is not a valid integer"
+                    ) from exc
             elif config_key == "no_http":
                 result["http_enabled"] = val.lower() not in ("true", "1", "yes")
             else:

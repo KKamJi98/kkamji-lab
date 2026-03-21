@@ -1,6 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
+# 전역 임시 디렉터리 (trap cleanup 대상)
+_MIRROR_TMP_DIR=""
+
+# 종료 시 임시 디렉터리 정리
+cleanup() {
+  local exit_code=$?
+  if [ -n "$_MIRROR_TMP_DIR" ] && [ -d "$_MIRROR_TMP_DIR" ]; then
+    rm -rf "$_MIRROR_TMP_DIR"
+  fi
+  exit "$exit_code"
+}
+trap cleanup EXIT
+
 #######################################
 # Container Image Mirror Tool (crane-based)
 #
@@ -218,18 +231,24 @@ load_images() {
   # yq로 YAML 파싱하여 배열로 변환
   IMAGES=()
   local count
-  count=$(yq '.images | length' "$IMAGES_FILE")
+  count=$(yq '.images | length' "$IMAGES_FILE") || { log_error "yq 파싱 실패: ${IMAGES_FILE}"; exit 1; }
 
-  if [ "$count" -eq 0 ]; then
+  if [ -z "$count" ] || [ "$count" -eq 0 ]; then
     log_error "이미지 목록이 비어있습니다"
     exit 1
   fi
 
   for ((i=0; i<count; i++)); do
     local chart source dest
-    chart=$(yq ".images[$i].chart" "$IMAGES_FILE")
-    source=$(yq ".images[$i].source" "$IMAGES_FILE")
-    dest=$(yq ".images[$i].dest" "$IMAGES_FILE")
+    chart=$(yq ".images[$i].chart" "$IMAGES_FILE") || { log_error "이미지 #$((i+1)): chart 파싱 실패"; exit 1; }
+    source=$(yq ".images[$i].source" "$IMAGES_FILE") || { log_error "이미지 #$((i+1)): source 파싱 실패"; exit 1; }
+    dest=$(yq ".images[$i].dest" "$IMAGES_FILE") || { log_error "이미지 #$((i+1)): dest 파싱 실패"; exit 1; }
+
+    if [ -z "$source" ] || [ -z "$dest" ]; then
+      log_error "이미지 #$((i+1)): source 또는 dest가 비어있습니다 (source='${source}', dest='${dest}')"
+      continue
+    fi
+
     IMAGES+=("${chart}|${source}|${dest}")
   done
 
@@ -518,8 +537,8 @@ mirror_images_parallel() {
   log_info "이미지 미러링 시작 (병렬 처리: ${PARALLEL_JOBS}개)..."
 
   local total=${#IMAGES[@]}
-  local tmp_dir
-  tmp_dir=$(mktemp -d)
+  _MIRROR_TMP_DIR=$(mktemp -d)
+  local tmp_dir="$_MIRROR_TMP_DIR"
 
   # 이미지 목록을 파일로 저장
   local idx=1

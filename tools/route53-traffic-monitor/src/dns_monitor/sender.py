@@ -29,6 +29,7 @@ class TrafficSender:
         self._records = records
         self._resolver = resolver
         self._running = False
+        self._pending_tasks: set[asyncio.Task] = set()
 
         # value → SetIdentifier 매핑 (A/CNAME 직접 매칭)
         self._value_map = build_value_to_identifier_map(records)
@@ -74,11 +75,22 @@ class TrafficSender:
         try:
             while self._running:
                 start = time.monotonic()
-                asyncio.ensure_future(self._probe_once(http_client))
+                task = asyncio.ensure_future(self._probe_once(http_client))
+                task.set_name("probe_once")
+                self._pending_tasks.add(task)
+                task.add_done_callback(self._pending_tasks.discard)
                 elapsed = time.monotonic() - start
                 sleep_time = max(0, interval - elapsed)
                 await asyncio.sleep(sleep_time)
+        except asyncio.CancelledError:
+            pass
         finally:
+            if self._pending_tasks:
+                tasks = list(self._pending_tasks)
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                self._pending_tasks.clear()
             if http_client:
                 await http_client.aclose()
 

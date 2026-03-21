@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -32,11 +33,26 @@ def parse_kubeconfig_value(path_str: str) -> list[Path]:
     return paths
 
 
+def _atomic_write_text(target: Path, content: str) -> None:
+    """Write content to target path atomically via a temp file in the same directory."""
+    fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def write_state_file(selected_configs: list[Path]) -> Path:
-    """Write the selected kubeconfig paths to the shared state file."""
+    """Write the selected kubeconfig paths to the shared state file atomically."""
     state_path = get_state_file()
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(":".join(str(p) for p in selected_configs))
+    _atomic_write_text(state_path, ":".join(str(p) for p in selected_configs))
     return state_path
 
 
@@ -296,7 +312,7 @@ def update_kubeconfig(
     if not rc_path.exists():
         if shell_config.name == "fish":
             rc_path.parent.mkdir(parents=True, exist_ok=True)
-            rc_path.write_text("# Created by kube-pick\n\n")
+            _atomic_write_text(rc_path, "# Created by kube-pick\n\n")
         else:
             logger.error(f"RC file not found: {rc_path}")
             return False, None
@@ -309,6 +325,11 @@ def update_kubeconfig(
 
     try:
         content = rc_path.read_text()
+    except (PermissionError, OSError) as e:
+        logger.error(f"Failed to read RC file {rc_path}: {e}")
+        return False, None
+
+    try:
         pattern = shell_config.get_sync_block_pattern()
         new_block = shell_config.get_sync_block()
 
@@ -329,7 +350,12 @@ def update_kubeconfig(
             new_content = content.rstrip() + f"\n\n{new_block}\n"
             logger.info("Adding kube-pick sync block at end of file")
 
-        rc_path.write_text(new_content)
+        try:
+            _atomic_write_text(rc_path, new_content)
+        except (PermissionError, OSError) as e:
+            logger.error(f"Failed to write RC file {rc_path}: {e}")
+            return False, None
+
         logger.info(f"Updated {rc_path}")
         return True, backup_path
 

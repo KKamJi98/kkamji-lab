@@ -125,6 +125,8 @@ def get_worktrees(bare_repo: Path) -> list[Worktree]:
     """Get list of all worktrees from the bare repository."""
     result = run_git(["worktree", "list", "--porcelain"], cwd=bare_repo)
     if result.returncode != 0:
+        if result.stderr:
+            print(f"{Color.RED}FAIL{Color.RESET} worktree list failed: {result.stderr.strip()}")
         return []
 
     worktrees: list[Worktree] = []
@@ -998,7 +1000,12 @@ def cmd_remove(
 
         result = run_git(args, cwd=bare_repo)
         if result.returncode != 0:
-            print(f"  {Color.RED}FAIL{Color.RESET} {result.stderr.strip()}")
+            print(f"  {Color.RED}FAIL{Color.RESET} worktree 제거 실패: {result.stderr.strip()}")
+            if delete_branch and wt.branch and not wt.branch.startswith("(detached"):
+                print(
+                    f"  {Color.YELLOW}SKIP{Color.RESET} worktree 제거 실패로 branch 삭제를 건너뜁니다"
+                    f" ({wt.branch})"
+                )
             fail_count += 1
             print()
             continue

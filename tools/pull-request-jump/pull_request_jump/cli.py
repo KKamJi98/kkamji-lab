@@ -80,7 +80,9 @@ def run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
 def get_remote_url(remote: str) -> str:
     result = run_git(["remote", "get-url", remote])
     if result.returncode != 0:
-        raise PrOpenError(f"Failed to read remote URL for '{remote}'.")
+        stderr = result.stderr.strip()
+        detail = f": {stderr}" if stderr else ""
+        raise PrOpenError(f"Failed to read remote URL for '{remote}'{detail}.")
     url = result.stdout.strip()
     if not url:
         raise PrOpenError(f"Remote '{remote}' has no URL configured.")
@@ -147,7 +149,7 @@ def get_default_branch(remote: str) -> str:
             if line.startswith("HEAD branch:"):
                 return line.split(":", 1)[1].strip()
 
-    for branch in ("main", "master"):
+    for branch in ("main", "master", "develop", "trunk"):
         if remote_branch_exists(remote, branch):
             return branch
 

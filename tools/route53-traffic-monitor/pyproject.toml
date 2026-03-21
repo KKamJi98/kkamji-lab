@@ -5,13 +5,13 @@ description = "Route53 Weighted Traffic Monitor - 가중치 설정 vs 실제 트
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "boto3>=1.35.0",
-    "awscrt>=0.23.0",
-    "rich>=13.9.0",
-    "typer>=0.15.0",
-    "dnspython>=2.7.0",
-    "httpx>=0.28.0",
-    "python-dotenv>=1.0.0",
+    "boto3>=1.35.0,<2",
+    "awscrt>=0.23.0,<1",
+    "rich>=13.9.0,<14",
+    "typer>=0.15.0,<1",
+    "dnspython>=2.7.0,<3",
+    "httpx>=0.28.0,<1",
+    "python-dotenv>=1.0.0,<2",
 ]
 
 [project.scripts]
@@ -29,9 +29,12 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["E501"]
 
 [dependency-groups]
 dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
     "ruff>=0.14.9",
 ]

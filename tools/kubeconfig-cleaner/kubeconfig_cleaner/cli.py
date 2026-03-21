@@ -95,8 +95,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if output_path.exists():
-            backup_path = backup_file(output_path)
-            print(f"Backup saved: {backup_path}")
+            try:
+                backup_path = backup_file(output_path)
+                print(f"Backup saved: {backup_path}")
+            except Exception as exc:
+                print(f"Backup failed: {exc}", file=sys.stderr)
+                return 1
         else:
             ensure_parent_dir(output_path)
 

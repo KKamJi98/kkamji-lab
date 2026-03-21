@@ -9,6 +9,7 @@ from pathlib import Path
 from kubeconfig_merger.kubeconfig import (
     DEFAULT_KUBE_DIR,
     DEFAULT_KUBECONFIG,
+    DuplicateEntryError,
     backup_file,
     dedupe_paths,
     ensure_parent_dir,
@@ -48,6 +49,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--current-context",
         help="Override current-context in the output",
+    )
+    parser.add_argument(
+        "--strategy",
+        choices=["last-wins", "skip", "error"],
+        default="last-wins",
+        help=(
+            "How to handle duplicate cluster/user/context names. "
+            "'last-wins' (default): overwrite the earlier entry and print a WARNING. "
+            "'skip': keep the first entry and ignore subsequent duplicates. "
+            "'error': abort immediately when a duplicate is found."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -104,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         configs = [load_yaml(path) for path in input_paths]
-        merge_result = merge_kubeconfigs(configs)
+        merge_result = merge_kubeconfigs(configs, strategy=args.strategy)
         merged_config = merge_result.config
 
         if args.current_context:
@@ -120,15 +132,20 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
+        strategy_label = args.strategy
         if merge_result.duplicate_clusters:
             print(
-                f"Duplicate clusters (last wins): {format_names(merge_result.duplicate_clusters)}"
+                f"Duplicate clusters ({strategy_label}): "
+                f"{format_names(merge_result.duplicate_clusters)}"
             )
         if merge_result.duplicate_users:
-            print(f"Duplicate users (last wins): {format_names(merge_result.duplicate_users)}")
+            print(
+                f"Duplicate users ({strategy_label}): {format_names(merge_result.duplicate_users)}"
+            )
         if merge_result.duplicate_contexts:
             print(
-                f"Duplicate contexts (last wins): {format_names(merge_result.duplicate_contexts)}"
+                f"Duplicate contexts ({strategy_label}): "
+                f"{format_names(merge_result.duplicate_contexts)}"
             )
 
         if args.dry_run:
@@ -145,6 +162,9 @@ def main(argv: list[str] | None = None) -> int:
         print("done.")
         return 0
 
+    except DuplicateEntryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
