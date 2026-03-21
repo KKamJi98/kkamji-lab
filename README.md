@@ -56,22 +56,29 @@
 
 ## 4. 도구 (CLI)
 
-각 도구의 설치/사용법은 해당 README를 따르세요. Python CLI 도구는 보통 `uv tool install .` 패턴을 사용합니다.
+각 도구의 설치/사용법은 해당 README를 따르세요. Python CLI 도구는 `uv tool install .` 패턴을 사용합니다.
+
+### Python CLI 도구
+
+| 도구 | 명령어 | 목적 | Python |
+| --- | --- | --- | --- |
+| domain-resource-tracer | `drt` | Route53 도메인에서 연결된 AWS 리소스(ALB, CloudFront 등) 추적 | 3.11+ |
+| git-worktree-tool | `wt` | Git worktree bare repository 관리 CLI | 3.9+ |
+| kube-pick | `kubepick` | 여러 kubeconfig 파일 중 원하는 컨텍스트 선택/전환 | 3.9+ |
+| kubeconfig-cleaner | `kubeconfig-cleaner` | 미사용 cluster/user 엔트리 정리 | 3.9+ |
+| kubeconfig-merger | `kubeconfig-merger` | 여러 kubeconfig 파일을 하나로 병합 | 3.9+ |
+| pull-request-jump | `prj` | CLI에서 GitHub/Bitbucket PR 페이지 자동 열기 | 3.9+ |
+| route53-traffic-monitor | `dnsmon` | Route53 가중치 레코드의 설정 비율 vs 실제 트래픽 실시간 비교 | 3.11+ |
+| swagger-loadgen | `swagger-loadgen` | Swagger/OpenAPI 스펙에서 GET endpoint 자동 수집 후 고정 TPS 부하 생성 | 3.11+ |
+
+### 셸 스크립트 / 기타
 
 | 도구 | 목적 | 안내 |
 | --- | --- | --- |
-| domain-resource-tracer | Route53 도메인에서 연결된 AWS 리소스(ALB, CloudFront 등) 추적 | `tools/domain-resource-tracer/README.md` |
 | eks-token-cache | EKS 토큰 캐싱으로 kubectl 실행 속도 개선 | `tools/eks-token-cache/README.md` |
-| git-worktree-tool | Git worktree bare repository 관리 CLI | `tools/git-worktree-tool/README.md` |
-| kube-pick | 여러 kubeconfig 파일 중 원하는 컨텍스트 선택/전환 | `tools/kube-pick/README.md` |
 | kubectx-kubens | kubectx/kubens 대체 zsh 셸 함수 (fzf+캐시 기반) | `tools/kubectx-kubens/README.md` |
-| kubeconfig-cleaner | 사용하지 않는 cluster/user 엔트리 정리 | `tools/kubeconfig-cleaner/README.md` |
-| kubeconfig-merger | 여러 kubeconfig 파일을 하나로 병합 | `tools/kubeconfig-merger/README.md` |
 | markdown-fmt | study README 헤더 번호 자동 정리 | `tools/markdown-fmt/` |
 | mirror-container-images | crane 기반 컨테이너 이미지 ECR 미러링 | `tools/mirror-container-images/README.md` |
-| pull-request-jump | CLI에서 GitHub/Bitbucket PR 페이지 자동 열기 | `tools/pull-request-jump/README.md` |
-| route53-traffic-monitor | Route53 가중치 레코드의 설정 비율 vs 실제 트래픽 실시간 비교 | `tools/route53-traffic-monitor/README.md` |
-| swagger-loadgen | Swagger/OpenAPI 스펙에서 GET endpoint 자동 수집 후 고정 TPS 부하 생성 | `tools/swagger-loadgen/README.md` |
 
 ---
 
@@ -84,11 +91,14 @@ cd kkamji-lab
 
 # 원하는 스터디로 이동
 cd study/cilium-study
-# 또는
-cd study/istio-study
+
+# Python CLI 도구 설치 (예: git-worktree-tool)
+cd tools/git-worktree-tool
+uv tool install .
+wt --help
 ```
 
-각 스터디의 상세 절차는 해당 README를 따르세요.
+각 스터디/도구의 상세 절차는 해당 README를 따르세요.
 
 ---
 
@@ -104,6 +114,8 @@ cd study/istio-study
 | kubectl | Kubernetes CLI | `brew install kubernetes-cli` |
 | Helm | 패키지 관리자 | `brew install helm` |
 | kind | 로컬 K8s 클러스터 | `brew install kind` |
+| Packer | 머신 이미지 빌드 | `brew install hashicorp/tap/packer` |
+| Terraform | IaC 프로비저닝 | `brew install hashicorp/tap/terraform` |
 | uv | Python CLI 도구 설치 | `brew install uv` |
 
 ---
