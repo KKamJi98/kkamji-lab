@@ -8,6 +8,7 @@
 
 - `study/`: 기술 스터디 및 실습 노트 (Cilium, Istio, ArgoCD 등)
 - `tools/`: 실습/운영을 위한 Python CLI 도구 모음
+- `packer/`: Packer 기반 이미지 빌드 실험
 
 ---
 
@@ -15,18 +16,27 @@
 
 ```
 .
+├── packer/
+│   └── eks-1.34/               # EKS AMI 빌드 실험
 ├── study/
-│   ├── aws/                # AWS 실험 (Kinesis 디렉터리만 존재)
-│   ├── ci-cd-study/        # GitOps/ArgoCD 중심 CI/CD 스터디
-│   ├── cilium-study/       # Cilium CNI 스터디
-│   ├── istio-study/        # Istio 서비스 메시 스터디
-│   └── jenkins/            # Jenkins Operator 실습
+│   ├── aws/                    # AWS 실험 (Kinesis)
+│   ├── ci-cd-study/            # GitOps/ArgoCD 중심 CI/CD 스터디
+│   ├── cilium-study/           # Cilium CNI 스터디
+│   ├── istio-study/            # Istio 서비스 메시 스터디
+│   └── jenkins/                # Jenkins Operator 실습
 ├── tools/
-│   ├── domain-resource-tracer/
-│   ├── kube-pick/
-│   ├── kubeconfig-cleaner/
-│   ├── kubeconfig-merger/
-│   └── markdown-fmt/
+│   ├── domain-resource-tracer/ # Route53 → AWS 리소스 추적
+│   ├── eks-token-cache/        # EKS 토큰 캐시 스크립트
+│   ├── git-worktree-tool/      # Git worktree bare repo 관리 CLI
+│   ├── kube-pick/              # kubeconfig 컨텍스트 선택/전환
+│   ├── kubectx-kubens/         # kubectx/kubens 셸 함수 (fzf+캐시)
+│   ├── kubeconfig-cleaner/     # 미사용 cluster/user 정리
+│   ├── kubeconfig-merger/      # kubeconfig 병합
+│   ├── markdown-fmt/           # README 헤더 번호 정리
+│   ├── mirror-container-images/# 컨테이너 이미지 ECR 미러링
+│   ├── pull-request-jump/      # PR 페이지 오픈 CLI
+│   ├── route53-traffic-monitor/# Route53 가중치 트래픽 모니터
+│   └── swagger-loadgen/        # Swagger 기반 부하 생성 도구
 └── README.md
 ```
 
@@ -51,10 +61,17 @@
 | 도구 | 목적 | 안내 |
 | --- | --- | --- |
 | domain-resource-tracer | Route53 도메인에서 연결된 AWS 리소스(ALB, CloudFront 등) 추적 | `tools/domain-resource-tracer/README.md` |
+| eks-token-cache | EKS 토큰 캐싱으로 kubectl 실행 속도 개선 | `tools/eks-token-cache/README.md` |
+| git-worktree-tool | Git worktree bare repository 관리 CLI | `tools/git-worktree-tool/README.md` |
 | kube-pick | 여러 kubeconfig 파일 중 원하는 컨텍스트 선택/전환 | `tools/kube-pick/README.md` |
+| kubectx-kubens | kubectx/kubens 대체 zsh 셸 함수 (fzf+캐시 기반) | `tools/kubectx-kubens/README.md` |
 | kubeconfig-cleaner | 사용하지 않는 cluster/user 엔트리 정리 | `tools/kubeconfig-cleaner/README.md` |
 | kubeconfig-merger | 여러 kubeconfig 파일을 하나로 병합 | `tools/kubeconfig-merger/README.md` |
 | markdown-fmt | study README 헤더 번호 자동 정리 | `tools/markdown-fmt/` |
+| mirror-container-images | crane 기반 컨테이너 이미지 ECR 미러링 | `tools/mirror-container-images/README.md` |
+| pull-request-jump | CLI에서 GitHub/Bitbucket PR 페이지 자동 열기 | `tools/pull-request-jump/README.md` |
+| route53-traffic-monitor | Route53 가중치 레코드의 설정 비율 vs 실제 트래픽 실시간 비교 | `tools/route53-traffic-monitor/README.md` |
+| swagger-loadgen | Swagger/OpenAPI 스펙에서 GET endpoint 자동 수집 후 고정 TPS 부하 생성 | `tools/swagger-loadgen/README.md` |
 
 ---
 
