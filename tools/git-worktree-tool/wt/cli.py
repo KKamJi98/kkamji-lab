@@ -1163,7 +1163,13 @@ def _worktree_branch_completer(prefix: str, **kwargs) -> list[str]:
 
 
 def _worktree_identifier_completer(prefix: str, **kwargs) -> list[str]:
-    """Complete worktree identifiers (branch + directory names) with substring matching."""
+    """Complete worktree identifiers (directory names) with substring matching.
+
+    Returns directory names instead of branch names to avoid shell word-break
+    issues caused by ``/`` in branch names (e.g. ``feat/topic``).  The rm
+    command resolves directory names via ``find_worktrees_by_identifier``, so
+    this is functionally equivalent.
+    """
     bare_repo = find_bare_repo()
     if bare_repo is None:
         return []
@@ -1172,11 +1178,10 @@ def _worktree_identifier_completer(prefix: str, **kwargs) -> list[str]:
     seen: set[str] = set()
     prefix_lower = prefix.lower()
     for wt in worktrees:
-        if prefix_lower in wt.branch.lower() and wt.branch not in seen:
-            candidates.append(wt.branch)
-            seen.add(wt.branch)
         dirname = wt.path.name
-        if dirname != wt.branch and prefix_lower in dirname.lower() and dirname not in seen:
+        if dirname not in seen and (
+            prefix_lower in dirname.lower() or prefix_lower in wt.branch.lower()
+        ):
             candidates.append(dirname)
             seen.add(dirname)
     return candidates

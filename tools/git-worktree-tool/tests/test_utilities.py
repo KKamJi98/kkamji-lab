@@ -283,7 +283,8 @@ def test_worktree_branch_completer_returns_empty_without_bare_repo(monkeypatch) 
 # --- _worktree_identifier_completer ---
 
 
-def test_worktree_identifier_completer_returns_branch_and_dirname(monkeypatch) -> None:
+def test_worktree_identifier_completer_returns_dirname_only(monkeypatch) -> None:
+    """Completer returns directory names (no slash) to avoid shell word-break issues."""
     monkeypatch.setattr(cli, "find_bare_repo", lambda cwd=None: Path("/bare"))
     monkeypatch.setattr(
         cli,
@@ -294,9 +295,21 @@ def test_worktree_identifier_completer_returns_branch_and_dirname(monkeypatch) -
         ],
     )
     result = cli._worktree_identifier_completer("10042")
-    assert "feat/DAC-10042" in result
-    assert "feat-DAC-10042" in result
-    assert len(result) == 2
+    assert result == ["feat-DAC-10042"]
+
+
+def test_worktree_identifier_completer_matches_branch_name_returns_dirname(monkeypatch) -> None:
+    """Substring in branch name should still return the directory name."""
+    monkeypatch.setattr(cli, "find_bare_repo", lambda cwd=None: Path("/bare"))
+    monkeypatch.setattr(
+        cli,
+        "get_worktrees",
+        lambda bare: [
+            _wt("feat/block-tencent-cidr", "/repo/feat-block-tencent-cidr"),
+        ],
+    )
+    result = cli._worktree_identifier_completer("tencent")
+    assert result == ["feat-block-tencent-cidr"]
 
 
 def test_worktree_identifier_completer_deduplicates_same_name(monkeypatch) -> None:
