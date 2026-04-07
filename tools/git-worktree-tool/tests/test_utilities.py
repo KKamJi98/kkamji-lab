@@ -232,3 +232,84 @@ def test_find_bare_repo_rejects_non_bare_dot_bare(tmp_path, monkeypatch) -> None
 def test_find_bare_repo_returns_none_when_nothing_found(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cli, "run_git", lambda args, cwd=None: _fail())
     assert cli.find_bare_repo(tmp_path) is None
+
+
+# --- _substring_validator ---
+
+
+def test_substring_validator_matches_substring() -> None:
+    assert cli._substring_validator("feat/DAC-10042", "10042") is True
+
+
+def test_substring_validator_matches_prefix() -> None:
+    assert cli._substring_validator("feat/DAC-10042", "feat") is True
+
+
+def test_substring_validator_no_match() -> None:
+    assert cli._substring_validator("feat/DAC-10042", "xyz") is False
+
+
+def test_substring_validator_case_insensitive() -> None:
+    assert cli._substring_validator("feat/DAC-10042", "dac") is True
+
+
+def test_substring_validator_empty_prefix_matches_all() -> None:
+    assert cli._substring_validator("main", "") is True
+
+
+# --- _worktree_branch_completer ---
+
+
+def test_worktree_branch_completer_substring_match(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "find_bare_repo", lambda cwd=None: Path("/bare"))
+    monkeypatch.setattr(
+        cli,
+        "get_worktrees",
+        lambda bare: [
+            _wt("feat/DAC-10042", "/repo/feat-DAC-10042"),
+            _wt("feat/TECH-4228", "/repo/feat-TECH-4228"),
+            _wt("main", "/repo/main"),
+        ],
+    )
+    result = cli._worktree_branch_completer("10042")
+    assert result == ["feat/DAC-10042"]
+
+
+def test_worktree_branch_completer_returns_empty_without_bare_repo(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "find_bare_repo", lambda cwd=None: None)
+    assert cli._worktree_branch_completer("any") == []
+
+
+# --- _worktree_identifier_completer ---
+
+
+def test_worktree_identifier_completer_returns_branch_and_dirname(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "find_bare_repo", lambda cwd=None: Path("/bare"))
+    monkeypatch.setattr(
+        cli,
+        "get_worktrees",
+        lambda bare: [
+            _wt("feat/DAC-10042", "/repo/feat-DAC-10042"),
+            _wt("feat/TECH-4228", "/repo/feat-TECH-4228"),
+        ],
+    )
+    result = cli._worktree_identifier_completer("10042")
+    assert "feat/DAC-10042" in result
+    assert "feat-DAC-10042" in result
+    assert len(result) == 2
+
+
+def test_worktree_identifier_completer_deduplicates_same_name(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "find_bare_repo", lambda cwd=None: Path("/bare"))
+    monkeypatch.setattr(
+        cli,
+        "get_worktrees",
+        lambda bare: [_wt("main", "/repo/main")],
+    )
+    result = cli._worktree_identifier_completer("main")
+    assert result == ["main"]
+
+
+def test_worktree_identifier_completer_returns_empty_without_bare_repo(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "find_bare_repo", lambda cwd=None: None)
+    assert cli._worktree_identifier_completer("any") == []

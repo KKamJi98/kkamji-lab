@@ -1145,13 +1145,41 @@ def cmd_remove(
 
 
 # Argument completers for shell tab-completion
+
+
+def _substring_validator(completion: str, prefix: str) -> bool:
+    """Validate completion by substring match (case-insensitive)."""
+    return prefix.lower() in completion.lower()
+
+
 def _worktree_branch_completer(prefix: str, **kwargs) -> list[str]:
     """Complete branch names from existing worktrees."""
     bare_repo = find_bare_repo()
     if bare_repo is None:
         return []
     worktrees = get_worktrees(bare_repo)
-    return [wt.branch for wt in worktrees if wt.branch.startswith(prefix)]
+    prefix_lower = prefix.lower()
+    return [wt.branch for wt in worktrees if prefix_lower in wt.branch.lower()]
+
+
+def _worktree_identifier_completer(prefix: str, **kwargs) -> list[str]:
+    """Complete worktree identifiers (branch + directory names) with substring matching."""
+    bare_repo = find_bare_repo()
+    if bare_repo is None:
+        return []
+    worktrees = get_worktrees(bare_repo)
+    candidates: list[str] = []
+    seen: set[str] = set()
+    prefix_lower = prefix.lower()
+    for wt in worktrees:
+        if prefix_lower in wt.branch.lower() and wt.branch not in seen:
+            candidates.append(wt.branch)
+            seen.add(wt.branch)
+        dirname = wt.path.name
+        if dirname != wt.branch and prefix_lower in dirname.lower() and dirname not in seen:
+            candidates.append(dirname)
+            seen.add(dirname)
+    return candidates
 
 
 def _remote_branch_completer(prefix: str, **kwargs) -> list[str]:
@@ -1163,10 +1191,11 @@ def _remote_branch_completer(prefix: str, **kwargs) -> list[str]:
     if result.returncode != 0:
         return []
     branches = []
+    prefix_lower = prefix.lower()
     for line in result.stdout.strip().split("\n"):
         if line.startswith("origin/"):
             branch = line[7:]  # Remove "origin/" prefix
-            if branch != "HEAD" and branch.startswith(prefix):
+            if branch != "HEAD" and prefix_lower in branch.lower():
                 branches.append(branch)
     return branches
 
@@ -1219,7 +1248,7 @@ def main() -> int:
         "identifier",
         nargs="*",
         help="Branch/path identifiers to remove (supports multiple)",
-    ).completer = _worktree_branch_completer
+    ).completer = _worktree_identifier_completer
     rm_parser.add_argument(
         "-m",
         "--match",
@@ -1286,7 +1315,7 @@ def main() -> int:
 
     # Enable shell tab-completion when argcomplete is installed.
     if argcomplete is not None:
-        argcomplete.autocomplete(parser)
+        argcomplete.autocomplete(parser, validator=_substring_validator)
 
     args = parser.parse_args()
 
