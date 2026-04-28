@@ -94,9 +94,13 @@ def find_bare_repo(start_path: Path | None = None) -> Path | None:
     while current != current.parent:
         bare_path = current / ".bare"
         if bare_path.is_dir():
-            # Verify it's actually a git bare repository
-            verify = run_git(["rev-parse", "--is-bare-repository"], cwd=bare_path)
-            if verify.returncode == 0 and verify.stdout.strip() == "true":
+            # Verify it's a valid git directory. Use --resolve-git-dir rather
+            # than --is-bare-repository because the latter returns false when
+            # core.bare has been explicitly set to false (e.g. to work around
+            # starship's git_status bare-detection bug). The structure is still
+            # a valid bare layout regardless of the config flag.
+            verify = run_git(["rev-parse", "--resolve-git-dir", str(bare_path)])
+            if verify.returncode == 0:
                 return bare_path
         current = current.parent
 
@@ -122,22 +126,36 @@ def _parse_worktree_record(record: dict[str, str]) -> Worktree | None:
 
 
 def get_worktrees(bare_repo: Path) -> list[Worktree]:
-    """Get list of all worktrees from the bare repository."""
+    """Get list of all worktrees from the bare repository.
+
+    The bare repo itself is filtered out explicitly. When core.bare is false
+    (either historically, or set by cmd_init to work around starship's
+    git_status bug), git porcelain no longer tags the bare entry with ``bare``
+    — it looks like a regular worktree. Without this filter a ``wt remove``
+    run could match the bare dir and destroy the repo.
+    """
     result = run_git(["worktree", "list", "--porcelain"], cwd=bare_repo)
     if result.returncode != 0:
         if result.stderr:
             print(f"{Color.RED}FAIL{Color.RESET} worktree list failed: {result.stderr.strip()}")
         return []
 
+    bare_resolved = bare_repo.resolve()
     worktrees: list[Worktree] = []
     current_wt: dict[str, str] = {}
+
+    def _maybe_append(record: dict[str, str]) -> None:
+        wt = _parse_worktree_record(record)
+        if wt is None:
+            return
+        if wt.path.resolve() == bare_resolved:
+            return
+        worktrees.append(wt)
 
     for line in result.stdout.strip().split("\n"):
         if not line:
             if current_wt:
-                wt = _parse_worktree_record(current_wt)
-                if wt is not None:
-                    worktrees.append(wt)
+                _maybe_append(current_wt)
                 current_wt = {}
             continue
 
@@ -152,9 +170,7 @@ def get_worktrees(bare_repo: Path) -> list[Worktree]:
 
     # Handle last worktree (porcelain output may not end with blank line)
     if current_wt:
-        wt = _parse_worktree_record(current_wt)
-        if wt is not None:
-            worktrees.append(wt)
+        _maybe_append(current_wt)
 
     return worktrees
 
@@ -546,6 +562,31 @@ def get_default_branch(bare_repo: Path) -> str:
     return "main"  # default fallback
 
 
+def get_default_remote_ref(bare_repo: Path) -> str | None:
+    """Resolve the remote default ref (e.g. ``origin/main``).
+
+    Tries ``git symbolic-ref refs/remotes/origin/HEAD`` first.  When that ref
+    is missing — common in bare worktree setups created without
+    ``git remote set-head`` — falls back to :func:`get_default_branch` and
+    verifies the candidate (``origin/<branch>``) actually exists via
+    ``git rev-parse --verify``.
+
+    Returns ``None`` if no default remote ref can be resolved, so callers can
+    surface an actionable error instead of crashing on ``origin/HEAD``.
+    """
+    sym = run_git(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=bare_repo)
+    if sym.returncode == 0:
+        ref = sym.stdout.strip()
+        if ref.startswith("refs/remotes/"):
+            return ref.removeprefix("refs/remotes/")
+
+    candidate = f"origin/{get_default_branch(bare_repo)}"
+    verify = run_git(["rev-parse", "--verify", candidate], cwd=bare_repo)
+    if verify.returncode == 0:
+        return candidate
+    return None
+
+
 def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> int:
     """Initialize a bare repository with worktree structure.
 
@@ -590,6 +631,16 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
             print(f"  {result.stderr.strip()}")
         return 1
     print(f"  {Color.GREEN}OK{Color.RESET} cloned to {bare_path}")
+
+    # Work around starship's git_status module treating any repo with
+    # core.bare=true as non-renderable, even when operating from a linked
+    # worktree. The on-disk layout is still a valid bare repo — only the
+    # flag is flipped — so git worktree / fetch / push all keep working.
+    bare_cfg = run_git(["config", "core.bare", "false"], cwd=bare_path)
+    if bare_cfg.returncode != 0:
+        print(f"  {Color.YELLOW}WARN{Color.RESET} failed to set core.bare=false")
+    else:
+        print(f"  {Color.GREEN}OK{Color.RESET} set core.bare=false")
 
     # Step 2: Configure fetch refspec for all branches
     print()
@@ -972,8 +1023,10 @@ def cmd_remove(
             return 1
 
     # Fetch before branch deletion so local knows about remote merges
+    default_remote_ref: str | None = None
     if delete_branch:
         run_git(["fetch", "--all", "--prune"], cwd=bare_repo)
+        default_remote_ref = get_default_remote_ref(bare_repo)
 
     print()
 
@@ -1019,9 +1072,23 @@ def cmd_remove(
             br_result = run_git(["branch", delete_flag, wt.branch], cwd=bare_repo)
             if br_result.returncode != 0 and not force:
                 # Safe delete failed — check if branch was merged on remote
+                if default_remote_ref is None:
+                    print(
+                        f"  {Color.RED}FAIL{Color.RESET} branch delete:"
+                        " unable to resolve remote default ref (origin/HEAD)"
+                    )
+                    print(
+                        "    hint: run"
+                        f" `git -C {bare_repo} remote set-head origin --auto`"
+                        " to initialise origin/HEAD"
+                    )
+                    fail_count += 1
+                    print()
+                    continue
+                ref = default_remote_ref
                 run_git(["fetch", "--prune"], cwd=bare_repo)
                 merged = run_git(
-                    ["branch", "-r", "--merged", "origin/HEAD"],
+                    ["branch", "-r", "--merged", ref],
                     cwd=bare_repo,
                 )
                 remote_ref = f"origin/{wt.branch}"
@@ -1034,15 +1101,15 @@ def cmd_remove(
                     }
                 remote_merged = remote_ref in merged_refs
 
-                # Force delete is allowed only when local branch tip is already part of origin/HEAD.
+                # Force delete is allowed only when local branch tip is already part of <ref>.
                 local_ancestor = run_git(
-                    ["merge-base", "--is-ancestor", wt.branch, "origin/HEAD"],
+                    ["merge-base", "--is-ancestor", wt.branch, ref],
                     cwd=bare_repo,
                 )
                 if local_ancestor.returncode not in (0, 1):
                     print(
                         f"  {Color.RED}FAIL{Color.RESET} branch delete:"
-                        " unable to verify ancestry against origin/HEAD"
+                        f" unable to verify ancestry against {ref}"
                     )
                     if local_ancestor.stderr.strip():
                         print(f"    {local_ancestor.stderr.strip()}")
@@ -1062,7 +1129,7 @@ def cmd_remove(
                 elif remote_merged:
                     print(
                         f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
-                        " (local branch has commits not in origin/HEAD)"
+                        f" (local branch has commits not in {ref})"
                     )
                     fail_count += 1
                 else:
@@ -1092,9 +1159,9 @@ def cmd_remove(
                             )
                             fail_count += 1
                     elif not remote_exists.stdout.strip():
-                        # Remote branch gone, local not ancestor of origin/HEAD.
+                        # Remote branch gone, local not ancestor of <ref>.
                         # Common with squash/rebase merge — try merge-tree detection.
-                        if _is_squash_merged(wt.branch, "origin/HEAD", bare_repo):
+                        if _is_squash_merged(wt.branch, ref, bare_repo):
                             br_result = run_git(["branch", "-D", wt.branch], cwd=bare_repo)
                             if br_result.returncode == 0:
                                 print(
@@ -1110,7 +1177,7 @@ def cmd_remove(
                         else:
                             print(
                                 f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
-                                " (remote branch gone, local commits not in origin/HEAD)"
+                                f" (remote branch gone, local commits not in {ref})"
                             )
                             fail_count += 1
                     else:

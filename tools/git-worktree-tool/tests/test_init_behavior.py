@@ -42,6 +42,37 @@ def test_cmd_init_does_not_create_root_git_file(tmp_path: Path, monkeypatch) -> 
     assert not (target / ".git").exists()
 
 
+def test_cmd_init_sets_core_bare_false(tmp_path: Path, monkeypatch) -> None:
+    """cmd_init must flip core.bare to false after clone so starship's
+    git_status module doesn't treat worktrees as bare repos."""
+    target = tmp_path / "demo-repo"
+    bare_path = target / ".bare"
+    config_calls: list[tuple[list[str], Path | None]] = []
+
+    monkeypatch.setattr(cli, "get_default_branch", lambda _bare_repo: "main")
+    monkeypatch.setattr(cli, "has_remote_branch", lambda _bare_repo, _branch: False)
+
+    def fake_run_git(args: list[str], cwd: Path | None = None) -> CompletedProcess[str]:
+        if args[:2] == ["clone", "--bare"]:
+            bare_path.mkdir(parents=True, exist_ok=True)
+            return _ok()
+        if args[:3] == ["config", "core.bare", "false"]:
+            config_calls.append((list(args), cwd))
+            return _ok()
+        if args[:2] == ["worktree", "add"]:
+            Path(args[2]).mkdir(parents=True, exist_ok=True)
+            return _ok()
+        return _ok()
+
+    monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+    result = cli.cmd_init("git@github.com:org/repo.git", str(target), None)
+
+    assert result == 0
+    assert len(config_calls) == 1, f"expected exactly one core.bare=false call, got {config_calls}"
+    assert config_calls[0][1] == bare_path
+
+
 def test_find_bare_repo_can_use_parent_dot_bare_without_root_git_file(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -53,8 +84,8 @@ def test_find_bare_repo_can_use_parent_dot_bare_without_root_git_file(
 
     def fake_run_git(args: list[str], cwd=None):
         # The bare-repo verification call should succeed
-        if args == ["rev-parse", "--is-bare-repository"]:
-            return _ok(stdout="true\n")
+        if args[:2] == ["rev-parse", "--resolve-git-dir"]:
+            return _ok(stdout=str(bare_dir) + "\n")
         return _fail()
 
     monkeypatch.setattr(cli, "run_git", fake_run_git)

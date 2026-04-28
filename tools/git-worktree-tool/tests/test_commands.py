@@ -602,6 +602,7 @@ class TestCmdRemove:
         wts = _make_worktrees(tmp_path, [{"branch": "feat/a"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
         monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/main")
         cli.Color.init()
 
         calls: list[tuple[str, ...]] = []
@@ -616,9 +617,9 @@ class TestCmdRemove:
                 return _fail(stderr="error: The branch 'feat/a' is not fully merged.")
             if args == ["fetch", "--prune"]:
                 return _ok()
-            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+            if args == ["branch", "-r", "--merged", "origin/main"]:
                 return _ok(stdout="  origin/feat/ab\n")
-            if args == ["merge-base", "--is-ancestor", "feat/a", "origin/HEAD"]:
+            if args == ["merge-base", "--is-ancestor", "feat/a", "origin/main"]:
                 return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
             if args == ["ls-remote", "--heads", "origin", "feat/a"]:
                 return _ok(stdout="deadbeef\trefs/heads/feat/a\n")
@@ -648,6 +649,7 @@ class TestCmdRemove:
         wts = _make_worktrees(tmp_path, [{"branch": "feat/auth"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
         monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/main")
         cli.Color.init()
 
         calls: list[tuple[str, ...]] = []
@@ -662,9 +664,9 @@ class TestCmdRemove:
                 return _fail(stderr="error: The branch 'feat/auth' is not fully merged.")
             if args == ["fetch", "--prune"]:
                 return _ok()
-            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+            if args == ["branch", "-r", "--merged", "origin/main"]:
                 return _ok(stdout="")
-            if args == ["merge-base", "--is-ancestor", "feat/auth", "origin/HEAD"]:
+            if args == ["merge-base", "--is-ancestor", "feat/auth", "origin/main"]:
                 return _ok()
             if args == ["ls-remote", "--heads", "origin", "feat/auth"]:
                 return _fail(stderr="fatal: Authentication failed for 'origin'")
@@ -694,6 +696,7 @@ class TestCmdRemove:
         wts = _make_worktrees(tmp_path, [{"branch": "feat/cache"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
         monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/main")
         cli.Color.init()
 
         calls: list[tuple[str, ...]] = []
@@ -708,10 +711,10 @@ class TestCmdRemove:
                 return _fail(stderr="error: The branch 'feat/cache' is not fully merged.")
             if args == ["fetch", "--prune"]:
                 return _ok()
-            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+            if args == ["branch", "-r", "--merged", "origin/main"]:
                 return _ok(stdout="")
-            if args == ["merge-base", "--is-ancestor", "feat/cache", "origin/HEAD"]:
-                return _fail(stderr="fatal: Not a valid object name origin/HEAD")
+            if args == ["merge-base", "--is-ancestor", "feat/cache", "origin/main"]:
+                return _fail(stderr="fatal: bad revision")
             if args == ["ls-remote", "--heads", "origin", "feat/cache"]:
                 raise AssertionError("ls-remote must not run when ancestry check fails")
             if args == ["branch", "-D", "feat/cache"]:
@@ -730,9 +733,112 @@ class TestCmdRemove:
 
         assert result == 2
         output = capsys.readouterr().out
-        assert "unable to verify ancestry against origin/HEAD" in output
+        assert "unable to verify ancestry against origin/main" in output
         assert "Summary: ok=1 skip=0 fail=1" in output
         assert ("branch", "-D", "feat/cache") not in calls
+
+    def test_remove_delete_branch_falls_back_when_origin_head_missing(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """When origin/HEAD is unset, fallback to origin/<default-branch> and proceed."""
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/fallback"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        cli.Color.init()
+
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run_git(args, cwd=None):
+            calls.append(tuple(args))
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            # origin/HEAD missing → symbolic-ref fails
+            if args == ["symbolic-ref", "refs/remotes/origin/HEAD"]:
+                return _fail(stderr="fatal: ref refs/remotes/origin/HEAD is not a symbolic ref")
+            # get_default_branch fallback path: list main
+            if args == ["branch", "-r", "--list", "origin/main"]:
+                return _ok(stdout="  origin/main\n")
+            # rev-parse verification succeeds for origin/main
+            if args == ["rev-parse", "--verify", "origin/main"]:
+                return _ok(stdout="abcd1234\n")
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "feat/fallback"]:
+                return _fail(stderr="error: The branch 'feat/fallback' is not fully merged.")
+            if args == ["fetch", "--prune"]:
+                return _ok()
+            if args == ["branch", "-r", "--merged", "origin/main"]:
+                return _ok(stdout="  origin/feat/fallback\n")
+            if args == ["merge-base", "--is-ancestor", "feat/fallback", "origin/main"]:
+                return _ok()
+            if args == ["branch", "-D", "feat/fallback"]:
+                return _ok()
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/fallback"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 0
+        output = capsys.readouterr().out
+        assert "merged on remote" in output
+        assert "FAIL" not in output
+        # Fallback path was actually used
+        assert ("symbolic-ref", "refs/remotes/origin/HEAD") in calls
+        assert ("rev-parse", "--verify", "origin/main") in calls
+
+    def test_remove_delete_branch_default_ref_unresolvable_fails_with_hint(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """When both origin/HEAD and fallback fail, fail with actionable hint."""
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/orphan"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        cli.Color.init()
+
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run_git(args, cwd=None):
+            calls.append(tuple(args))
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            if args == ["symbolic-ref", "refs/remotes/origin/HEAD"]:
+                return _fail(stderr="fatal: ref not symbolic")
+            if args == ["branch", "-r", "--list", "origin/main"]:
+                return _ok(stdout="")
+            if args == ["branch", "-r", "--list", "origin/master"]:
+                return _ok(stdout="")
+            if args == ["rev-parse", "--verify", "origin/main"]:
+                return _fail(stderr="fatal: Needed a single revision")
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "feat/orphan"]:
+                return _fail(stderr="error: The branch 'feat/orphan' is not fully merged.")
+            if args == ["branch", "-D", "feat/orphan"]:
+                raise AssertionError("force delete must not run when default ref unresolvable")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/orphan"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 2
+        output = capsys.readouterr().out
+        assert "unable to resolve remote default ref" in output
+        assert "remote set-head origin --auto" in output
+        assert "Summary: ok=1 skip=0 fail=1" in output
 
     def test_remove_squash_merged_branch_deleted_successfully(
         self, tmp_path, monkeypatch, capsys
@@ -741,6 +847,7 @@ class TestCmdRemove:
         wts = _make_worktrees(tmp_path, [{"branch": "feat/TECH-4177"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
         monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/main")
         cli.Color.init()
 
         TREE_SHA = "aabbccdd"
@@ -754,15 +861,15 @@ class TestCmdRemove:
                 return _fail(stderr="error: not fully merged")
             if args == ["fetch", "--prune"]:
                 return _ok()
-            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+            if args == ["branch", "-r", "--merged", "origin/main"]:
                 return _ok(stdout="")
-            if args == ["merge-base", "--is-ancestor", "feat/TECH-4177", "origin/HEAD"]:
+            if args == ["merge-base", "--is-ancestor", "feat/TECH-4177", "origin/main"]:
                 return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
             if args == ["ls-remote", "--heads", "origin", "feat/TECH-4177"]:
                 return _ok(stdout="")
-            if args == ["merge-tree", "--write-tree", "origin/HEAD", "feat/TECH-4177"]:
+            if args == ["merge-tree", "--write-tree", "origin/main", "feat/TECH-4177"]:
                 return _ok(stdout=TREE_SHA)
-            if args == ["rev-parse", "origin/HEAD^{tree}"]:
+            if args == ["rev-parse", "origin/main^{tree}"]:
                 return _ok(stdout=TREE_SHA)
             if args == ["branch", "-D", "feat/TECH-4177"]:
                 return _ok()
@@ -790,6 +897,7 @@ class TestCmdRemove:
         wts = _make_worktrees(tmp_path, [{"branch": "feat/diverged"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
         monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/main")
         cli.Color.init()
 
         def fake_run_git(args, cwd=None):
@@ -801,15 +909,15 @@ class TestCmdRemove:
                 return _fail(stderr="error: not fully merged")
             if args == ["fetch", "--prune"]:
                 return _ok()
-            if args == ["branch", "-r", "--merged", "origin/HEAD"]:
+            if args == ["branch", "-r", "--merged", "origin/main"]:
                 return _ok(stdout="")
-            if args == ["merge-base", "--is-ancestor", "feat/diverged", "origin/HEAD"]:
+            if args == ["merge-base", "--is-ancestor", "feat/diverged", "origin/main"]:
                 return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
             if args == ["ls-remote", "--heads", "origin", "feat/diverged"]:
                 return _ok(stdout="")
-            if args == ["merge-tree", "--write-tree", "origin/HEAD", "feat/diverged"]:
+            if args == ["merge-tree", "--write-tree", "origin/main", "feat/diverged"]:
                 return _ok(stdout="aaaa1111")
-            if args == ["rev-parse", "origin/HEAD^{tree}"]:
+            if args == ["rev-parse", "origin/main^{tree}"]:
                 return _ok(stdout="bbbb2222")
             if args == ["branch", "-D", "feat/diverged"]:
                 raise AssertionError("force delete must not run when not squash-merged")
@@ -828,7 +936,7 @@ class TestCmdRemove:
         assert result == 2
         output = capsys.readouterr().out
         assert "not fully merged" in output
-        assert "remote branch gone, local commits not in origin/HEAD" in output
+        assert "remote branch gone, local commits not in origin/main" in output
 
 
 # ────────────────────────── Caching behavior ──────────────────────────

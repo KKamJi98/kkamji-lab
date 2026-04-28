@@ -153,6 +153,50 @@ def test_get_default_branch_ultimate_fallback(monkeypatch) -> None:
     assert cli.get_default_branch(Path("/bare")) == "main"
 
 
+# --- get_default_remote_ref ---
+
+
+def test_get_default_remote_ref_from_symbolic_ref(monkeypatch) -> None:
+    def fake(args, cwd=None):
+        if args[0] == "symbolic-ref":
+            return _ok(stdout="refs/remotes/origin/main\n")
+        raise AssertionError(f"unexpected git call: {args}")
+
+    monkeypatch.setattr(cli, "run_git", fake)
+    assert cli.get_default_remote_ref(Path("/bare")) == "origin/main"
+
+
+def test_get_default_remote_ref_falls_back_to_existing_branch(monkeypatch) -> None:
+    def fake(args, cwd=None):
+        if args[0] == "symbolic-ref":
+            return _fail(stderr="fatal: ref not symbolic")
+        # get_default_branch fallback: list main → exists
+        if args[:3] == ["branch", "-r", "--list"]:
+            if args[3] == "origin/main":
+                return _ok(stdout="  origin/main\n")
+            return _ok(stdout="")
+        if args[:3] == ["rev-parse", "--verify", "origin/main"]:
+            return _ok(stdout="abc1234\n")
+        raise AssertionError(f"unexpected git call: {args}")
+
+    monkeypatch.setattr(cli, "run_git", fake)
+    assert cli.get_default_remote_ref(Path("/bare")) == "origin/main"
+
+
+def test_get_default_remote_ref_returns_none_when_unresolvable(monkeypatch) -> None:
+    def fake(args, cwd=None):
+        if args[0] == "symbolic-ref":
+            return _fail(stderr="fatal: ref not symbolic")
+        if args[:3] == ["branch", "-r", "--list"]:
+            return _ok(stdout="")
+        if args[:2] == ["rev-parse", "--verify"]:
+            return _fail(stderr="fatal: Needed a single revision")
+        raise AssertionError(f"unexpected git call: {args}")
+
+    monkeypatch.setattr(cli, "run_git", fake)
+    assert cli.get_default_remote_ref(Path("/bare")) is None
+
+
 # --- _parse_worktree_record ---
 
 
@@ -189,6 +233,32 @@ def test_parse_worktree_record_bare_returns_none() -> None:
     assert cli._parse_worktree_record(record) is None
 
 
+def test_get_worktrees_filters_bare_path_even_without_bare_marker(tmp_path, monkeypatch) -> None:
+    """When core.bare=false, git porcelain lists the bare dir like any other
+    worktree (no ``bare`` marker). ``get_worktrees`` must still drop it to
+    prevent it being matched by identifier/pattern-based operations such as
+    wt remove."""
+    bare_dir = tmp_path / ".bare"
+    wt_dir = tmp_path / "main"
+    bare_dir.mkdir()
+    wt_dir.mkdir()
+
+    porcelain = (
+        f"worktree {bare_dir}\n"
+        "HEAD abc12345def67890\n"
+        "branch refs/heads/master\n"
+        "\n"
+        f"worktree {wt_dir}\n"
+        "HEAD 999aaaabbbccccdd\n"
+        "branch refs/heads/main\n"
+    )
+
+    monkeypatch.setattr(cli, "run_git", lambda args, cwd=None: _ok(stdout=porcelain))
+
+    trees = cli.get_worktrees(bare_dir)
+    assert [t.path for t in trees] == [wt_dir]
+
+
 def test_parse_worktree_record_nonexistent_path_returns_none() -> None:
     record = {
         "worktree": "/nonexistent/path/that/does/not/exist",
@@ -221,12 +291,34 @@ def test_find_bare_repo_rejects_non_bare_dot_bare(tmp_path, monkeypatch) -> None
     def fake_run_git(args, cwd=None):
         if args == ["rev-parse", "--git-common-dir"]:
             return _fail()
-        if args == ["rev-parse", "--is-bare-repository"]:
-            return _ok(stdout="false\n")
+        if args[:2] == ["rev-parse", "--resolve-git-dir"]:
+            return _fail(stderr="fatal: not a gitdir")
         return _fail()
 
     monkeypatch.setattr(cli, "run_git", fake_run_git)
     assert cli.find_bare_repo(tmp_path) is None
+
+
+def test_find_bare_repo_accepts_bare_with_core_bare_false(tmp_path, monkeypatch) -> None:
+    """A .bare directory with core.bare=false is still a valid gitdir.
+
+    Regression guard: previously the verification used --is-bare-repository
+    which reads core.bare and returns false when it's been flipped — causing
+    wt to fail to locate layouts where core.bare was disabled as a starship
+    workaround.
+    """
+    bare_dir = tmp_path / ".bare"
+    bare_dir.mkdir()
+
+    def fake_run_git(args, cwd=None):
+        if args == ["rev-parse", "--git-common-dir"]:
+            return _fail()
+        if args[:2] == ["rev-parse", "--resolve-git-dir"]:
+            return _ok(stdout=str(bare_dir) + "\n")
+        return _fail()
+
+    monkeypatch.setattr(cli, "run_git", fake_run_git)
+    assert cli.find_bare_repo(tmp_path) == bare_dir
 
 
 def test_find_bare_repo_returns_none_when_nothing_found(tmp_path, monkeypatch) -> None:
