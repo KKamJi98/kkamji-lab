@@ -90,6 +90,12 @@ wt remove staging -f
 로컬 브랜치까지 같이 정리하려면 `-b/--branch`를 명시적으로 사용하세요.
 원격 브랜치까지 삭제하려면 `--remote`를 함께 사용하되, `--remote`는 `-b/--branch`가 필요합니다.
 
+`-b`로 브랜치를 삭제할 때, 머지되지 않은 브랜치는 커밋 손실을 막기 위해 **안전하게 보존**되며
+`WARN branch kept`으로 표시됩니다(에러 아님, exit code는 2). 보존된 브랜치는 머지 여부를
+확인한 뒤 `wt rm -f -b <id>` 또는 `git -C <repo>/.bare branch -D <branch>`로 강제 삭제할 수 있습니다.
+로컬 브랜치가 보존되면 `--remote`가 있어도 원격 브랜치는 삭제하지 않습니다(유일 사본 보호).
+`--dry-run -b`는 현재 refs 기준으로 로컬/원격 브랜치가 삭제될지, 보존될지, 검증 불가인지 미리 표시합니다.
+
 ### 새 원격 브랜치를 worktree로 추가
 
 ```bash
@@ -125,6 +131,9 @@ wt p
 wt pull --rebase
 wt p -r
 ```
+
+`wt pull`은 각 브랜치에 설정된 실제 upstream ref(`@{u}`)를 기준으로 동기화합니다.
+일반적인 경우는 `origin/<branch>`이지만, 다른 remote를 upstream으로 지정한 브랜치도 그대로 따릅니다.
 
 ### 기타
 
@@ -242,7 +251,7 @@ git worktree add ../staging staging
 
 - **ff-only by default**: `wt pull`은 기본적으로 fast-forward만 수행합니다. 로컬 커밋이 있으면 실패합니다.
 - **optional rebase**: `--rebase` 옵션 사용 시 rebase 수행, 충돌 시 자동 abort됩니다.
-- **dirty check**: uncommitted 변경이 있는 worktree는 자동으로 스킵합니다.
+- **dirty check**: uncommitted 변경이 있거나 상태 확인에 실패한 worktree는 안전하게 스킵합니다.
 - **no upstream skip**: upstream이 설정되지 않은 브랜치는 스킵합니다.
 
 ## Command Reference
@@ -259,10 +268,23 @@ git worktree add ../staging staging
 | `wt list` | `ls` | worktree 목록 |
 | `wt upstream` | `up` | upstream 자동 설정 |
 
+## Exit Codes
+
+`status`, `pull`, `upstream`, `remove`는 다음 규약을 따릅니다:
+
+| Code | 의미 |
+|------|------|
+| `0` | 모든 대상 성공 (요청한 worktree/branch/remote 작업 완료) |
+| `1` | 사용 오류 또는 치명적 상황 (worktree 없음, 매칭 없음, 사용자 중단, `--remote`를 `-b` 없이 사용) |
+| `2` | 부분 완료 (일부 `SKIP`/`WARN(kept)`/`FAIL`, 또는 매칭되지 않은 identifier/pattern 존재) |
+
+`status`는 dirty worktree가 있으면 `2`, `remove`는 보존된 브랜치(`kept`)가 있어도 `2`를 반환합니다.
+
 ## Requirements
 
 - Python 3.9+
 - Git 2.15+ (worktree support)
+- Git 2.38+ (`wt remove -b`의 squash/rebase-merge 자동 감지 — `merge-tree --write-tree`. 미만 버전에서는 해당 브랜치가 보존되며 수동 삭제가 필요)
 
 ## License
 

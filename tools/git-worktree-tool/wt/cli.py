@@ -54,6 +54,15 @@ class Worktree:
     is_detached: bool = False
     _dirty: bool | None = field(default=None, repr=False, compare=False)
     _has_upstream: bool | None = field(default=None, repr=False, compare=False)
+    _upstream_ref: str | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class BranchDeleteAssessment:
+    status: str
+    reason: str
+    detail: str = ""
+    hint: str = ""
 
 
 def run_git(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -180,25 +189,50 @@ def is_dirty(wt: Worktree) -> bool:
     if wt._dirty is not None:
         return wt._dirty
     result = run_git(["status", "--porcelain"], cwd=wt.path)
+    if result.returncode != 0:
+        wt._dirty = True
+        return wt._dirty
     wt._dirty = bool(result.stdout.strip())
     return wt._dirty
+
+
+def get_upstream_ref(wt: Worktree) -> str | None:
+    """Return the configured upstream ref for a worktree branch, if any."""
+    if wt._upstream_ref is not None:
+        return wt._upstream_ref
+    result = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=wt.path)
+    if result.returncode != 0:
+        return None
+    upstream_ref = result.stdout.strip()
+    if not upstream_ref:
+        return None
+    wt._upstream_ref = upstream_ref
+    return wt._upstream_ref
 
 
 def has_upstream(wt: Worktree) -> bool:
     """Check if branch has upstream configured. Result is cached on the Worktree."""
     if wt._has_upstream is not None:
         return wt._has_upstream
-    result = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=wt.path)
-    wt._has_upstream = result.returncode == 0
+    wt._has_upstream = get_upstream_ref(wt) is not None
     return wt._has_upstream
+
+
+def has_git_ref(repo: Path, ref: str) -> bool:
+    """Check if a git ref exists in the given repository/worktree."""
+    result = run_git(["rev-parse", "--verify", "--quiet", ref], cwd=repo)
+    return result.returncode == 0
 
 
 def get_sync_status(wt: Worktree) -> str:
     """Get sync status with upstream (ahead/behind)."""
     if wt.is_detached:
         return ""
+    upstream_ref = get_upstream_ref(wt)
+    if upstream_ref is None:
+        return ""
     result = run_git(
-        ["rev-list", "--left-right", "--count", f"{wt.branch}...origin/{wt.branch}"], cwd=wt.path
+        ["rev-list", "--left-right", "--count", f"{wt.branch}...{upstream_ref}"], cwd=wt.path
     )
     if result.returncode != 0:
         return ""
@@ -381,13 +415,14 @@ def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
             skip_count += 1
             continue
 
-        if not has_upstream(wt):
+        upstream_ref = get_upstream_ref(wt)
+        if upstream_ref is None:
             print(f"  {Color.YELLOW}SKIP{Color.RESET} no upstream configured")
             skip_count += 1
             continue
 
-        if not has_remote_branch(bare_repo, wt.branch):
-            print(f"  {Color.YELLOW}SKIP{Color.RESET} no remote branch origin/{wt.branch}")
+        if not has_git_ref(wt.path, upstream_ref):
+            print(f"  {Color.YELLOW}SKIP{Color.RESET} upstream ref not found {upstream_ref}")
             skip_count += 1
             continue
 
@@ -396,7 +431,7 @@ def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
 
         if rebase:
             # Try rebase onto remote branch
-            result = run_git(["rebase", f"origin/{wt.branch}"], cwd=wt.path)
+            result = run_git(["rebase", upstream_ref], cwd=wt.path)
             if result.returncode == 0:
                 head_after = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
                 if head_before == head_after:
@@ -411,7 +446,7 @@ def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
                 fail_count += 1
         else:
             # Try fast-forward merge (default, safe)
-            result = run_git(["merge", "--ff-only", f"origin/{wt.branch}"], cwd=wt.path)
+            result = run_git(["merge", "--ff-only", upstream_ref], cwd=wt.path)
             if result.returncode == 0:
                 head_after = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
                 if head_before == head_after:
@@ -426,7 +461,7 @@ def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
     print()
     print(f"Summary: ok={ok_count} skip={skip_count} fail={fail_count}")
 
-    return 2 if fail_count > 0 else 0
+    return 2 if fail_count > 0 or skip_count > 0 else 0
 
 
 def cmd_list(bare_repo: Path, json_output: bool = False) -> int:
@@ -542,7 +577,7 @@ def cmd_upstream(bare_repo: Path) -> int:
     print()
     print(f"Summary: ok={ok_count} skip={skip_count} fail={fail_count}")
 
-    return 2 if fail_count > 0 else 0
+    return 2 if fail_count > 0 or skip_count > 0 else 0
 
 
 def get_default_branch(bare_repo: Path) -> str:
@@ -631,16 +666,6 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
             print(f"  {result.stderr.strip()}")
         return 1
     print(f"  {Color.GREEN}OK{Color.RESET} cloned to {bare_path}")
-
-    # Work around starship's git_status module treating any repo with
-    # core.bare=true as non-renderable, even when operating from a linked
-    # worktree. The on-disk layout is still a valid bare repo — only the
-    # flag is flipped — so git worktree / fetch / push all keep working.
-    bare_cfg = run_git(["config", "core.bare", "false"], cwd=bare_path)
-    if bare_cfg.returncode != 0:
-        print(f"  {Color.YELLOW}WARN{Color.RESET} failed to set core.bare=false")
-    else:
-        print(f"  {Color.GREEN}OK{Color.RESET} set core.bare=false")
 
     # Step 2: Configure fetch refspec for all branches
     print()
@@ -759,6 +784,16 @@ def cmd_init(repo_url: str, path: str | None, worktrees: list[str] | None) -> in
                 else:
                     print(f"  {Color.GREEN}OK{Color.RESET} set upstream to origin/{branch}")
                 created_branches.add(branch)
+
+    # Work around starship's git_status module treating any repo with
+    # core.bare=true as non-renderable, even when operating from a linked
+    # worktree. Apply this only after initial worktrees are created; otherwise
+    # git treats the .bare directory as using the default branch worktree.
+    bare_cfg = run_git(["config", "core.bare", "false"], cwd=bare_path)
+    if bare_cfg.returncode != 0:
+        print(f"  {Color.YELLOW}WARN{Color.RESET} failed to set core.bare=false")
+    else:
+        print(f"  {Color.GREEN}OK{Color.RESET} set core.bare=false")
 
     # Summary
     print()
@@ -932,6 +967,214 @@ def find_worktrees_by_pattern(worktrees: list[Worktree], pattern: str) -> list[W
     return matches
 
 
+def _force_delete_branch(bare_repo: Path, branch: str, reason: str) -> str:
+    """Run ``git branch -D`` for an already-merged branch and report.
+
+    Returns ``"deleted"`` on success, ``"error"`` if git refuses.
+    """
+    br_result = run_git(["branch", "-D", branch], cwd=bare_repo)
+    if br_result.returncode == 0:
+        print(f"  {Color.GREEN}OK{Color.RESET} deleted local branch {branch} ({reason})")
+        return "deleted"
+    print(f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}")
+    return "error"
+
+
+def _keep_branch(bare_repo: Path, branch: str, reason: str) -> str:
+    """Report a branch preserved because it is not merged.
+
+    This is an intentional git safety behaviour, not a failure — the worktree
+    is already gone and only the (unmerged) branch is kept. Returns ``"kept"``.
+    """
+    print(f"  {Color.YELLOW}WARN{Color.RESET} branch kept: {reason}")
+    print(
+        "    hint: not deleted to avoid losing commits — force with"
+        f" `git -C {bare_repo} branch -D {branch}` or `wt rm -f -b {branch}`"
+    )
+    return "kept"
+
+
+def _remote_branches_containing(branch: str, bare_repo: Path) -> set[str]:
+    """Remote-tracking branches whose history already includes ``branch``'s tip.
+
+    Returns the set of ``origin/*`` refs (excluding ``origin/<branch>`` itself
+    and the ``origin/HEAD`` pointer line) that contain the branch tip. A
+    non-empty set means the commits are preserved on the remote — e.g. merged
+    into ``origin/staging`` in a repo that promotes staging -> prod, so the tip
+    is not yet an ancestor of the default branch. Returns an empty set on probe
+    failure, so callers fall back to the conservative keep behaviour.
+    """
+    result = run_git(["branch", "-r", "--contains", branch], cwd=bare_repo)
+    if result.returncode != 0:
+        return set()
+    self_ref = f"origin/{branch}"
+    return {
+        ref
+        for line in result.stdout.splitlines()
+        if (ref := line.strip().removeprefix("* ").strip()) and ref != self_ref and "->" not in ref
+    }
+
+
+def _assess_local_branch_delete(
+    bare_repo: Path,
+    branch: str,
+    default_remote_ref: str | None,
+) -> BranchDeleteAssessment:
+    """Classify whether an unmerged branch can be safely force-deleted."""
+    if default_remote_ref is None:
+        return BranchDeleteAssessment(
+            status="error",
+            reason="unable to resolve remote default ref (origin/HEAD)",
+            hint=(
+                f"run `git -C {bare_repo} remote set-head origin --auto` to initialise origin/HEAD"
+            ),
+        )
+
+    ref = default_remote_ref
+    merged = run_git(["branch", "-r", "--merged", ref], cwd=bare_repo)
+    remote_ref = f"origin/{branch}"
+    merged_refs: set[str] = set()
+    if merged.returncode == 0:
+        merged_refs = {
+            line.strip().removeprefix("* ").strip()
+            for line in merged.stdout.splitlines()
+            if line.strip()
+        }
+    remote_merged = remote_ref in merged_refs
+
+    # Force delete is allowed only when the local tip is already part of <ref>.
+    local_ancestor = run_git(["merge-base", "--is-ancestor", branch, ref], cwd=bare_repo)
+    if local_ancestor.returncode not in (0, 1):
+        return BranchDeleteAssessment(
+            status="error",
+            reason=f"unable to verify ancestry against {ref}",
+            detail=local_ancestor.stderr.strip(),
+        )
+
+    if remote_merged and local_ancestor.returncode == 0:
+        return BranchDeleteAssessment(status="delete", reason="merged on remote")
+    if remote_merged:
+        return BranchDeleteAssessment(
+            status="keep",
+            reason=f"local branch has commits not in {ref}",
+        )
+
+    # Remote branch not in merged list — check whether it still exists, but
+    # only trust ls-remote on success.
+    remote_exists = run_git(["ls-remote", "--heads", "origin", branch], cwd=bare_repo)
+    if remote_exists.returncode != 0:
+        return BranchDeleteAssessment(
+            status="error",
+            reason="unable to verify remote branch state",
+            detail=remote_exists.stderr.strip(),
+        )
+
+    remote_gone = not remote_exists.stdout.strip()
+    if remote_gone and local_ancestor.returncode == 0:
+        return BranchDeleteAssessment(status="delete", reason="remote branch gone, local merged")
+    if remote_gone:
+        # The remote feature branch is gone, but the commits may still be
+        # preserved on another remote branch — e.g. merged into origin/staging
+        # in a repo that promotes staging -> prod, so the tip is not yet an
+        # ancestor of the default branch. If so, deleting loses nothing.
+        preserved_on = _remote_branches_containing(branch, bare_repo)
+        if preserved_on:
+            return BranchDeleteAssessment(
+                status="delete",
+                reason=f"remote branch gone, commits preserved on {', '.join(sorted(preserved_on))}",
+            )
+        # Common with squash/rebase merge — try merge-tree detection.
+        if _is_squash_merged(branch, ref, bare_repo):
+            return BranchDeleteAssessment(status="delete", reason="squash-merged")
+        return BranchDeleteAssessment(
+            status="keep",
+            reason=f"remote branch gone, local commits not in {ref}",
+        )
+    return BranchDeleteAssessment(
+        status="keep",
+        reason=f"branch exists on origin and not merged into {ref}",
+    )
+
+
+def _print_branch_delete_error(assessment: BranchDeleteAssessment) -> None:
+    print(f"  {Color.RED}FAIL{Color.RESET} branch delete: {assessment.reason}")
+    if assessment.detail:
+        print(f"    {assessment.detail}")
+    if assessment.hint:
+        print(f"    hint: {assessment.hint}")
+
+
+def _delete_local_branch(
+    bare_repo: Path,
+    branch: str,
+    force: bool,
+    default_remote_ref: str | None,
+) -> str:
+    """Delete the local branch whose worktree was just removed.
+
+    Returns one of:
+    - ``"deleted"``: branch was removed
+    - ``"kept"``:    branch safely preserved because it is not merged into the
+      default ref (intentional safety, NOT an error)
+    - ``"error"``:   deletion failed, or merge state could not be verified
+    """
+    delete_flag = "-D" if force else "-d"
+    br_result = run_git(["branch", delete_flag, branch], cwd=bare_repo)
+    if br_result.returncode == 0:
+        print(f"  {Color.GREEN}OK{Color.RESET} deleted local branch {branch}")
+        return "deleted"
+
+    if force:
+        # -D was requested explicitly and still failed → genuine error.
+        print(f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}")
+        return "error"
+
+    # Safe delete (-d) refused. Investigate whether the branch is actually
+    # merged before deciding between force-delete, keep, or error.
+    assessment = _assess_local_branch_delete(bare_repo, branch, default_remote_ref)
+    if assessment.status == "delete":
+        return _force_delete_branch(bare_repo, branch, assessment.reason)
+    if assessment.status == "keep":
+        return _keep_branch(bare_repo, branch, assessment.reason)
+    _print_branch_delete_error(assessment)
+    return "error"
+
+
+def _describe_remove_dry_run(
+    bare_repo: Path,
+    wt: Worktree,
+    force: bool,
+    delete_branch: bool,
+    delete_remote: bool,
+    default_remote_ref: str | None,
+) -> str:
+    """Describe what cmd_remove would do without mutating worktrees or branches."""
+    message = f"  {wt.branch}: worktree will be removed"
+    if not delete_branch or not wt.branch or wt.branch.startswith("(detached"):
+        return message
+
+    if force:
+        message += " + local branch will be force-deleted"
+        if delete_remote:
+            message += " + remote branch will be deleted"
+        return message
+
+    assessment = _assess_local_branch_delete(bare_repo, wt.branch, default_remote_ref)
+    if assessment.status == "delete":
+        message += f" + local branch will be deleted ({assessment.reason})"
+        if delete_remote:
+            message += " + remote branch will be deleted"
+    elif assessment.status == "keep":
+        message += f" + local branch will be kept ({assessment.reason})"
+        if delete_remote:
+            message += " + remote branch will be skipped"
+    else:
+        message += f" + local branch delete cannot be verified ({assessment.reason})"
+        if delete_remote:
+            message += " + remote branch will be skipped"
+    return message
+
+
 def cmd_remove(
     bare_repo: Path,
     identifiers: list[str],
@@ -1000,16 +1243,25 @@ def cmd_remove(
         )
 
     if dry_run:
+        default_remote_ref: str | None = None
+        if delete_branch and not force:
+            default_remote_ref = get_default_remote_ref(bare_repo)
         if delete_branch:
             print()
             for wt in target_list:
-                msg = f"  {wt.branch}: worktree + local branch will be deleted"
-                if delete_remote:
-                    msg += " + remote branch will be deleted"
-                print(msg)
+                print(
+                    _describe_remove_dry_run(
+                        bare_repo,
+                        wt,
+                        force,
+                        delete_branch,
+                        delete_remote,
+                        default_remote_ref,
+                    )
+                )
         print()
         print(f"{Color.GREEN}OK{Color.RESET} dry run complete (no changes made)")
-        return 0
+        return 2 if missing_identifiers or missing_patterns else 0
 
     # Confirmation prompt unless --yes is passed
     if not yes:
@@ -1032,6 +1284,7 @@ def cmd_remove(
 
     ok_count = 0
     skip_count = 0
+    kept_count = 0
     fail_count = 0
 
     for wt in target_list:
@@ -1068,145 +1321,41 @@ def cmd_remove(
 
         # Delete local branch if requested
         if delete_branch and wt.branch and not wt.branch.startswith("(detached"):
-            delete_flag = "-D" if force else "-d"
-            br_result = run_git(["branch", delete_flag, wt.branch], cwd=bare_repo)
-            if br_result.returncode != 0 and not force:
-                # Safe delete failed — check if branch was merged on remote
-                if default_remote_ref is None:
-                    print(
-                        f"  {Color.RED}FAIL{Color.RESET} branch delete:"
-                        " unable to resolve remote default ref (origin/HEAD)"
-                    )
-                    print(
-                        "    hint: run"
-                        f" `git -C {bare_repo} remote set-head origin --auto`"
-                        " to initialise origin/HEAD"
-                    )
-                    fail_count += 1
-                    print()
-                    continue
-                ref = default_remote_ref
-                run_git(["fetch", "--prune"], cwd=bare_repo)
-                merged = run_git(
-                    ["branch", "-r", "--merged", ref],
-                    cwd=bare_repo,
-                )
-                remote_ref = f"origin/{wt.branch}"
-                merged_refs = set()
-                if merged.returncode == 0:
-                    merged_refs = {
-                        line.strip().removeprefix("* ").strip()
-                        for line in merged.stdout.splitlines()
-                        if line.strip()
-                    }
-                remote_merged = remote_ref in merged_refs
-
-                # Force delete is allowed only when local branch tip is already part of <ref>.
-                local_ancestor = run_git(
-                    ["merge-base", "--is-ancestor", wt.branch, ref],
-                    cwd=bare_repo,
-                )
-                if local_ancestor.returncode not in (0, 1):
-                    print(
-                        f"  {Color.RED}FAIL{Color.RESET} branch delete:"
-                        f" unable to verify ancestry against {ref}"
-                    )
-                    if local_ancestor.stderr.strip():
-                        print(f"    {local_ancestor.stderr.strip()}")
-                    fail_count += 1
-                elif remote_merged and local_ancestor.returncode == 0:
-                    br_result = run_git(["branch", "-D", wt.branch], cwd=bare_repo)
-                    if br_result.returncode == 0:
-                        print(
-                            f"  {Color.GREEN}OK{Color.RESET} deleted local branch {wt.branch}"
-                            " (merged on remote)"
-                        )
-                    else:
-                        print(
-                            f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}"
-                        )
-                        fail_count += 1
-                elif remote_merged:
-                    print(
-                        f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
-                        f" (local branch has commits not in {ref})"
-                    )
-                    fail_count += 1
-                else:
-                    # Check whether remote branch is deleted, but only trust ls-remote on success.
-                    remote_exists = run_git(
-                        ["ls-remote", "--heads", "origin", wt.branch],
-                        cwd=bare_repo,
-                    )
-                    if remote_exists.returncode != 0:
-                        print(
-                            f"  {Color.RED}FAIL{Color.RESET} branch delete:"
-                            " unable to verify remote branch state"
-                        )
-                        if remote_exists.stderr.strip():
-                            print(f"    {remote_exists.stderr.strip()}")
-                        fail_count += 1
-                    elif not remote_exists.stdout.strip() and local_ancestor.returncode == 0:
-                        br_result = run_git(["branch", "-D", wt.branch], cwd=bare_repo)
-                        if br_result.returncode == 0:
-                            print(
-                                f"  {Color.GREEN}OK{Color.RESET} deleted local branch {wt.branch}"
-                                " (remote branch gone, local merged)"
-                            )
-                        else:
-                            print(
-                                f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}"
-                            )
-                            fail_count += 1
-                    elif not remote_exists.stdout.strip():
-                        # Remote branch gone, local not ancestor of <ref>.
-                        # Common with squash/rebase merge — try merge-tree detection.
-                        if _is_squash_merged(wt.branch, ref, bare_repo):
-                            br_result = run_git(["branch", "-D", wt.branch], cwd=bare_repo)
-                            if br_result.returncode == 0:
-                                print(
-                                    f"  {Color.GREEN}OK{Color.RESET} deleted local branch"
-                                    f" {wt.branch} (squash-merged)"
-                                )
-                            else:
-                                print(
-                                    f"  {Color.RED}FAIL{Color.RESET} branch delete:"
-                                    f" {br_result.stderr.strip()}"
-                                )
-                                fail_count += 1
-                        else:
-                            print(
-                                f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
-                                f" (remote branch gone, local commits not in {ref})"
-                            )
-                            fail_count += 1
-                    else:
-                        print(
-                            f"  {Color.RED}FAIL{Color.RESET} branch delete: not fully merged"
-                            " (branch exists on remote but not merged)"
-                        )
-                        fail_count += 1
-            elif br_result.returncode != 0:
-                print(f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}")
+            branch_status = _delete_local_branch(bare_repo, wt.branch, force, default_remote_ref)
+            if branch_status == "error":
                 fail_count += 1
-            else:
-                print(f"  {Color.GREEN}OK{Color.RESET} deleted local branch {wt.branch}")
+            elif branch_status == "kept":
+                kept_count += 1
 
-            # Delete remote branch if requested
+            # Delete remote branch if requested — but never when the local
+            # branch was preserved or its deletion failed, otherwise we'd drop
+            # the only remaining copy of unmerged commits.
             if delete_remote:
-                rr = run_git(["push", "origin", "--delete", wt.branch], cwd=bare_repo)
-                if rr.returncode != 0:
-                    print(f"  {Color.RED}FAIL{Color.RESET} remote delete: {rr.stderr.strip()}")
-                    fail_count += 1
+                if branch_status == "deleted":
+                    rr = run_git(["push", "origin", "--delete", wt.branch], cwd=bare_repo)
+                    if rr.returncode != 0:
+                        print(f"  {Color.RED}FAIL{Color.RESET} remote delete: {rr.stderr.strip()}")
+                        fail_count += 1
+                    else:
+                        print(
+                            f"  {Color.GREEN}OK{Color.RESET} deleted remote branch origin/{wt.branch}"
+                        )
                 else:
                     print(
-                        f"  {Color.GREEN}OK{Color.RESET} deleted remote branch origin/{wt.branch}"
+                        f"  {Color.YELLOW}WARN{Color.RESET} skipping remote delete:"
+                        f" local branch {wt.branch} was not deleted"
                     )
 
         print()
 
-    print(f"Summary: ok={ok_count} skip={skip_count} fail={fail_count}")
-    if fail_count > 0 or skip_count > 0 or missing_identifiers or missing_patterns:
+    print(f"Summary: ok={ok_count} skip={skip_count} kept={kept_count} fail={fail_count}")
+    if (
+        fail_count > 0
+        or skip_count > 0
+        or kept_count > 0
+        or missing_identifiers
+        or missing_patterns
+    ):
         return 2
     return 0
 

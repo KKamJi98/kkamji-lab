@@ -134,18 +134,26 @@ class TestCmdPull:
         worktrees,
         dirty_branches=None,
         no_upstream=None,
-        no_remote=None,
+        missing_upstream_ref=None,
     ):
         """Common setup for cmd_pull tests."""
         dirty_branches = dirty_branches or set()
         no_upstream = no_upstream or set()
-        no_remote = no_remote or set()
+        missing_upstream_ref = missing_upstream_ref or set()
 
         monkeypatch.setattr(cli, "get_worktrees", lambda _: worktrees)
         monkeypatch.setattr(cli, "cmd_fetch", lambda _: 0)
         monkeypatch.setattr(cli, "is_dirty", lambda wt: wt.branch in dirty_branches)
-        monkeypatch.setattr(cli, "has_upstream", lambda wt: wt.branch not in no_upstream)
-        monkeypatch.setattr(cli, "has_remote_branch", lambda bare, branch: branch not in no_remote)
+        monkeypatch.setattr(
+            cli,
+            "get_upstream_ref",
+            lambda wt: None if wt.branch in no_upstream else f"origin/{wt.branch}",
+        )
+        monkeypatch.setattr(
+            cli,
+            "has_git_ref",
+            lambda repo, ref: ref not in {f"origin/{branch}" for branch in missing_upstream_ref},
+        )
 
     def test_ff_only_success(self, tmp_path, monkeypatch, capsys) -> None:
         wts = _make_worktrees(tmp_path, [{"branch": "main"}])
@@ -218,8 +226,9 @@ class TestCmdPull:
         self._setup_pull(monkeypatch, tmp_path, wts, dirty_branches={"main"})
         cli.Color.init()
 
-        cli.cmd_pull(tmp_path)
+        result = cli.cmd_pull(tmp_path)
 
+        assert result == 2
         output = capsys.readouterr().out
         assert "dirty" in output.lower()
 
@@ -228,18 +237,31 @@ class TestCmdPull:
         self._setup_pull(monkeypatch, tmp_path, wts, no_upstream={"main"})
         cli.Color.init()
 
-        cli.cmd_pull(tmp_path)
+        result = cli.cmd_pull(tmp_path)
 
+        assert result == 2
         output = capsys.readouterr().out
         assert "no upstream" in output
+
+    def test_skip_missing_upstream_ref(self, tmp_path, monkeypatch, capsys) -> None:
+        wts = _make_worktrees(tmp_path, [{"branch": "main"}])
+        self._setup_pull(monkeypatch, tmp_path, wts, missing_upstream_ref={"main"})
+        cli.Color.init()
+
+        result = cli.cmd_pull(tmp_path)
+
+        assert result == 2
+        output = capsys.readouterr().out
+        assert "upstream ref not found origin/main" in output
 
     def test_skip_detached(self, tmp_path, monkeypatch, capsys) -> None:
         wts = _make_worktrees(tmp_path, [{"branch": "(detached abc1234)", "is_detached": True}])
         self._setup_pull(monkeypatch, tmp_path, wts)
         cli.Color.init()
 
-        cli.cmd_pull(tmp_path)
+        result = cli.cmd_pull(tmp_path)
 
+        assert result == 2
         output = capsys.readouterr().out
         assert "detached HEAD" in output
 
@@ -294,12 +316,54 @@ class TestCmdPull:
         output = capsys.readouterr().out
         assert "rebase failed" in output
 
+    def test_pull_uses_configured_upstream_ref(self, tmp_path, monkeypatch, capsys) -> None:
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/topic"}])
+        self._setup_pull(monkeypatch, tmp_path, wts)
+        monkeypatch.setattr(cli, "get_upstream_ref", lambda wt: "fork/feat-topic")
+
+        merge_calls: list[list[str]] = []
+
+        def fake_run_git(args, cwd=None):
+            if args[:2] == ["rev-parse", "HEAD"]:
+                return _ok(stdout="same_hash\n")
+            if args[:2] == ["merge", "--ff-only"]:
+                merge_calls.append(args)
+                return _ok(stdout="Already up to date.\n")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+        cli.Color.init()
+
+        result = cli.cmd_pull(tmp_path)
+
+        assert result == 0
+        assert ["merge", "--ff-only", "fork/feat-topic"] in merge_calls
+        assert "already up to date" in capsys.readouterr().out
+
     def test_fetch_failure_aborts(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(cli, "cmd_fetch", lambda _: 1)
 
         result = cli.cmd_pull(tmp_path)
 
         assert result == 1
+
+
+# ──────────────────────────────── cmd_upstream ────────────────────────────────
+
+
+class TestCmdUpstream:
+    def test_skip_existing_upstream_returns_partial(self, tmp_path, monkeypatch, capsys) -> None:
+        wts = _make_worktrees(tmp_path, [{"branch": "main"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "has_upstream", lambda wt: True)
+        cli.Color.init()
+
+        result = cli.cmd_upstream(tmp_path)
+
+        assert result == 2
+        output = capsys.readouterr().out
+        assert "upstream already set" in output
+        assert "Summary: ok=0 skip=1 fail=0" in output
 
 
 # ──────────────────────────────── cmd_add ────────────────────────────────
@@ -596,6 +660,62 @@ class TestCmdRemove:
         assert result == 1
         assert "No matching worktrees" in capsys.readouterr().out
 
+    def test_remove_dry_run_previews_kept_branch_and_remote_skip(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/keep"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/main")
+        cli.Color.init()
+
+        def fake_run_git(args, cwd=None):
+            if args == ["branch", "-r", "--merged", "origin/main"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "feat/keep", "origin/main"]:
+                return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+            if args == ["ls-remote", "--heads", "origin", "feat/keep"]:
+                return _ok(stdout="deadbeef\trefs/heads/feat/keep\n")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/keep"],
+            force=False,
+            dry_run=True,
+            delete_branch=True,
+            delete_remote=True,
+            yes=True,
+        )
+
+        assert result == 0
+        output = capsys.readouterr().out
+        assert "worktree will be removed" in output
+        assert "local branch will be kept" in output
+        assert "remote branch will be skipped" in output
+        assert "branch exists on origin and not merged into origin/main" in output
+
+    def test_remove_dry_run_returns_partial_for_missing_identifier(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        wts = _make_worktrees(tmp_path, [{"branch": "main"}, {"branch": "feat/one"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        cli.Color.init()
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/one", "missing"],
+            force=False,
+            dry_run=True,
+            yes=True,
+        )
+
+        assert result == 2
+        output = capsys.readouterr().out
+        assert "dry run complete" in output
+        assert "no match for identifier(s): missing" in output
+
     def test_remove_delete_branch_does_not_use_substring_remote_match(
         self, tmp_path, monkeypatch, capsys
     ) -> None:
@@ -639,8 +759,9 @@ class TestCmdRemove:
 
         assert result == 2
         output = capsys.readouterr().out
-        assert "branch exists on remote but not merged" in output
-        assert "Summary: ok=1 skip=0 fail=1" in output
+        assert "branch kept" in output
+        assert "branch exists on origin and not merged into origin/main" in output
+        assert "Summary: ok=1 skip=0 kept=1 fail=0" in output
         assert ("branch", "-D", "feat/a") not in calls
 
     def test_remove_delete_branch_ls_remote_failure_blocks_force_delete(
@@ -687,7 +808,7 @@ class TestCmdRemove:
         assert result == 2
         output = capsys.readouterr().out
         assert "unable to verify remote branch state" in output
-        assert "Summary: ok=1 skip=0 fail=1" in output
+        assert "Summary: ok=1 skip=0 kept=0 fail=1" in output
         assert ("branch", "-D", "feat/auth") not in calls
 
     def test_remove_delete_branch_ancestry_check_failure_returns_partial_failure(
@@ -734,7 +855,7 @@ class TestCmdRemove:
         assert result == 2
         output = capsys.readouterr().out
         assert "unable to verify ancestry against origin/main" in output
-        assert "Summary: ok=1 skip=0 fail=1" in output
+        assert "Summary: ok=1 skip=0 kept=0 fail=1" in output
         assert ("branch", "-D", "feat/cache") not in calls
 
     def test_remove_delete_branch_falls_back_when_origin_head_missing(
@@ -838,7 +959,7 @@ class TestCmdRemove:
         output = capsys.readouterr().out
         assert "unable to resolve remote default ref" in output
         assert "remote set-head origin --auto" in output
-        assert "Summary: ok=1 skip=0 fail=1" in output
+        assert "Summary: ok=1 skip=0 kept=0 fail=1" in output
 
     def test_remove_squash_merged_branch_deleted_successfully(
         self, tmp_path, monkeypatch, capsys
@@ -890,10 +1011,10 @@ class TestCmdRemove:
         assert "squash-merged" in output
         assert "FAIL" not in output
 
-    def test_remove_squash_merge_detection_negative_still_fails(
+    def test_remove_squash_merge_detection_negative_keeps_branch(
         self, tmp_path, monkeypatch, capsys
     ) -> None:
-        """When merge-tree shows divergent trees, branch delete should still fail."""
+        """When merge-tree shows divergent trees, the branch is safely kept (not failed)."""
         wts = _make_worktrees(tmp_path, [{"branch": "feat/diverged"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
         monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
@@ -935,8 +1056,213 @@ class TestCmdRemove:
 
         assert result == 2
         output = capsys.readouterr().out
-        assert "not fully merged" in output
+        assert "branch kept" in output
         assert "remote branch gone, local commits not in origin/main" in output
+        assert "FAIL" not in output
+        assert "Summary: ok=1 skip=0 kept=1 fail=0" in output
+
+    def test_remove_branch_preserved_on_other_remote_branch_is_deleted(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """Branch merged into origin/staging (not yet the default branch) is safe to delete.
+
+        GitOps repos promote staging -> prod: the commits live on origin/staging
+        long before origin/<default>, so the local branch must not be kept just
+        because it is not an ancestor of the default branch.
+        """
+        wts = _make_worktrees(tmp_path, [{"branch": "fix/n8n-oauth2"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/master")
+        cli.Color.init()
+
+        def fake_run_git(args, cwd=None):
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "fix/n8n-oauth2"]:
+                return _fail(stderr="error: not fully merged")
+            if args == ["branch", "-r", "--merged", "origin/master"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "fix/n8n-oauth2", "origin/master"]:
+                return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+            if args == ["ls-remote", "--heads", "origin", "fix/n8n-oauth2"]:
+                return _ok(stdout="")  # remote feature branch gone
+            if args == ["branch", "-r", "--contains", "fix/n8n-oauth2"]:
+                return _ok(stdout="  origin/staging\n")
+            if args[:2] == ["merge-tree", "--write-tree"]:
+                raise AssertionError(
+                    "squash detection must not run when commits are preserved on a remote branch"
+                )
+            if args == ["branch", "-D", "fix/n8n-oauth2"]:
+                return _ok()
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["fix/n8n-oauth2"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 0
+        output = capsys.readouterr().out
+        assert "commits preserved on origin/staging" in output
+        assert "branch kept" not in output
+        assert "FAIL" not in output
+        assert "Summary: ok=1 skip=0 kept=0 fail=0" in output
+
+    def test_remove_remote_delete_skipped_when_local_branch_kept(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """--remote must not delete the remote branch when the local branch was kept."""
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/keep"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/main")
+        cli.Color.init()
+
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run_git(args, cwd=None):
+            calls.append(tuple(args))
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "feat/keep"]:
+                return _fail(stderr="error: not fully merged")
+            if args == ["branch", "-r", "--merged", "origin/main"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "feat/keep", "origin/main"]:
+                return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+            if args == ["ls-remote", "--heads", "origin", "feat/keep"]:
+                return _ok(stdout="deadbeef\trefs/heads/feat/keep\n")  # remote still exists
+            if args[:2] == ["push", "origin"]:
+                raise AssertionError("remote branch must not be deleted when local is kept")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/keep"],
+            force=False,
+            delete_branch=True,
+            delete_remote=True,
+            yes=True,
+        )
+
+        assert result == 2
+        output = capsys.readouterr().out
+        assert "skipping remote delete" in output
+        assert "branch kept" in output
+        assert ("push", "origin", "--delete", "feat/keep") not in calls
+
+
+# ─────────────────────── _delete_local_branch (unit) ───────────────────────
+
+
+class TestDeleteLocalBranch:
+    def test_safe_delete_success_returns_deleted(self, tmp_path, monkeypatch, capsys) -> None:
+        monkeypatch.setattr(cli, "run_git", lambda args, cwd=None: _ok())
+        cli.Color.init()
+
+        status = cli._delete_local_branch(
+            tmp_path, "feat/x", force=False, default_remote_ref="origin/main"
+        )
+
+        assert status == "deleted"
+        assert "deleted local branch feat/x" in capsys.readouterr().out
+
+    def test_force_delete_failure_returns_error(self, tmp_path, monkeypatch, capsys) -> None:
+        def fake(args, cwd=None):
+            if args == ["branch", "-D", "feat/x"]:
+                return _fail(stderr="error: cannot delete")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake)
+        cli.Color.init()
+
+        status = cli._delete_local_branch(
+            tmp_path, "feat/x", force=True, default_remote_ref="origin/main"
+        )
+
+        assert status == "error"
+        assert "FAIL" in capsys.readouterr().out
+
+    def test_unresolvable_default_ref_returns_error(self, tmp_path, monkeypatch, capsys) -> None:
+        def fake(args, cwd=None):
+            if args == ["branch", "-d", "feat/x"]:
+                return _fail(stderr="error: not fully merged")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake)
+        cli.Color.init()
+
+        status = cli._delete_local_branch(tmp_path, "feat/x", force=False, default_remote_ref=None)
+
+        assert status == "error"
+        assert "unable to resolve remote default ref" in capsys.readouterr().out
+
+    def test_remote_gone_not_squash_returns_kept(self, tmp_path, monkeypatch, capsys) -> None:
+        """User scenario: remote gone, local not merged, not squash-merged → kept."""
+
+        def fake(args, cwd=None):
+            if args == ["branch", "-d", "feat/x"]:
+                return _fail(stderr="error: not fully merged")
+            if args == ["branch", "-r", "--merged", "origin/main"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "feat/x", "origin/main"]:
+                return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+            if args == ["ls-remote", "--heads", "origin", "feat/x"]:
+                return _ok(stdout="")  # remote gone
+            if args == ["merge-tree", "--write-tree", "origin/main", "feat/x"]:
+                return _ok(stdout="aaaa1111")
+            if args == ["rev-parse", "origin/main^{tree}"]:
+                return _ok(stdout="bbbb2222")  # divergent → not squash-merged
+            if args == ["branch", "-D", "feat/x"]:
+                raise AssertionError("must not force-delete a kept branch")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake)
+        cli.Color.init()
+
+        status = cli._delete_local_branch(
+            tmp_path, "feat/x", force=False, default_remote_ref="origin/main"
+        )
+
+        assert status == "kept"
+        output = capsys.readouterr().out
+        assert "branch kept" in output
+        assert "WARN" in output
+
+    def test_ls_remote_failure_returns_error(self, tmp_path, monkeypatch) -> None:
+        def fake(args, cwd=None):
+            if args == ["branch", "-d", "feat/x"]:
+                return _fail(stderr="error: not fully merged")
+            if args == ["branch", "-r", "--merged", "origin/main"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "feat/x", "origin/main"]:
+                return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+            if args == ["ls-remote", "--heads", "origin", "feat/x"]:
+                return _fail(stderr="fatal: auth failed")
+            if args == ["branch", "-D", "feat/x"]:
+                raise AssertionError("must not force-delete when ls-remote fails")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake)
+        cli.Color.init()
+
+        status = cli._delete_local_branch(
+            tmp_path, "feat/x", force=False, default_remote_ref="origin/main"
+        )
+
+        assert status == "error"
 
 
 # ────────────────────────── Caching behavior ──────────────────────────

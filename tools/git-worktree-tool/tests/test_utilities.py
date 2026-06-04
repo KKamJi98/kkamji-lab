@@ -34,10 +34,10 @@ def test_is_dirty_returns_false_when_clean(monkeypatch) -> None:
     assert cli.is_dirty(_wt()) is False
 
 
-def test_is_dirty_returns_false_on_git_failure(monkeypatch) -> None:
+def test_is_dirty_returns_true_on_git_failure(monkeypatch) -> None:
     monkeypatch.setattr(cli, "run_git", lambda args, cwd=None: _fail())
-    # git failure returns empty stdout → not dirty
-    assert cli.is_dirty(_wt()) is False
+    # Treat unknown status as dirty so destructive commands skip safely.
+    assert cli.is_dirty(_wt()) is True
 
 
 # --- has_upstream ---
@@ -51,6 +51,19 @@ def test_has_upstream_returns_true_on_success(monkeypatch) -> None:
 def test_has_upstream_returns_false_on_failure(monkeypatch) -> None:
     monkeypatch.setattr(cli, "run_git", lambda args, cwd=None: _fail())
     assert cli.has_upstream(_wt()) is False
+
+
+# --- get_upstream_ref ---
+
+
+def test_get_upstream_ref_returns_configured_upstream(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "run_git", lambda args, cwd=None: _ok(stdout="fork/feat-x\n"))
+    assert cli.get_upstream_ref(_wt(branch="feat/x")) == "fork/feat-x"
+
+
+def test_get_upstream_ref_returns_none_on_failure(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "run_git", lambda args, cwd=None: _fail())
+    assert cli.get_upstream_ref(_wt(branch="feat/x")) is None
 
 
 # --- get_sync_status ---
@@ -79,6 +92,23 @@ def test_get_sync_status_diverged(monkeypatch) -> None:
 def test_get_sync_status_returns_empty_on_failure(monkeypatch) -> None:
     monkeypatch.setattr(cli, "run_git", lambda args, cwd=None: _fail())
     assert cli.get_sync_status(_wt()) == ""
+
+
+def test_get_sync_status_uses_configured_upstream(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_git(args, cwd=None):
+        calls.append(args)
+        if args[:3] == ["rev-parse", "--abbrev-ref", "--symbolic-full-name"]:
+            return _ok(stdout="fork/feat-x\n")
+        if args[:2] == ["rev-list", "--left-right"]:
+            return _ok(stdout="1\t2\n")
+        return _fail()
+
+    monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+    assert cli.get_sync_status(_wt(branch="feat/x")) == "↑1 ↓2"
+    assert ["rev-list", "--left-right", "--count", "feat/x...fork/feat-x"] in calls
 
 
 def test_get_sync_status_skips_detached_head() -> None:
