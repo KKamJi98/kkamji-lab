@@ -42,6 +42,10 @@ def test_current_config_falls_back_to_active_file(fake_gcloud_home):
     assert current_config() == "infra"
 
 
+def test_current_config_returns_none_when_unset(fake_gcloud_home):
+    assert current_config() is None
+
+
 def test_adc_path_and_exists(fake_gcloud_home):
     acct = "infra@bunjang.co.kr"
     assert adc_exists(acct) is False
