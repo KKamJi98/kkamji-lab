@@ -1,3 +1,6 @@
+import json
+
+from gcloud_pick import config as cfgmod
 from gcloud_pick.config import (
     GcloudConfig,
     adc_exists,
@@ -5,6 +8,7 @@ from gcloud_pick.config import (
     current_config,
     gcloud_dir,
     list_configurations,
+    resolve_adc_account,
 )
 from tests.conftest import set_active, write_config
 
@@ -46,3 +50,30 @@ def test_adc_path_and_exists(fake_gcloud_home):
     p.parent.mkdir(parents=True)
     p.write_text("{}")
     assert adc_exists(acct) is True
+
+
+def test_resolve_service_account_uses_client_email(fake_gcloud_home, tmp_path):
+    adc = tmp_path / "sa.json"
+    adc.write_text(
+        json.dumps({"type": "service_account", "client_email": "svc@p.iam.gserviceaccount.com"})
+    )
+    assert resolve_adc_account(adc) == "svc@p.iam.gserviceaccount.com"
+
+
+def test_resolve_user_cred_uses_token_introspection(fake_gcloud_home, tmp_path, monkeypatch):
+    adc = tmp_path / "user.json"
+    adc.write_text(json.dumps({"type": "authorized_user", "refresh_token": "x"}))
+    monkeypatch.setattr(cfgmod, "_print_adc_access_token", lambda: "tok123")
+    monkeypatch.setattr(cfgmod, "_tokeninfo_email", lambda token: "ethan.kim@bunjang.co.kr")
+    assert resolve_adc_account(adc) == "ethan.kim@bunjang.co.kr"
+
+
+def test_resolve_returns_none_when_token_fails(fake_gcloud_home, tmp_path, monkeypatch):
+    adc = tmp_path / "user.json"
+    adc.write_text(json.dumps({"type": "authorized_user"}))
+    monkeypatch.setattr(cfgmod, "_print_adc_access_token", lambda: "")
+    assert resolve_adc_account(adc) is None
+
+
+def test_resolve_returns_none_when_file_missing(fake_gcloud_home, tmp_path):
+    assert resolve_adc_account(tmp_path / "nope.json") is None
