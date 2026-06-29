@@ -1,6 +1,7 @@
 import pytest
 
-from gcloud_pick.cli import parse_args
+from gcloud_pick.cli import parse_args, validate_selection
+from gcloud_pick.config import GcloudConfig
 
 
 def test_parse_args_positional_config():
@@ -25,3 +26,29 @@ def test_version_exits(capsys):
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "1.0.0" in out
+
+
+CONFIGS = [
+    GcloudConfig("default", "ethan.kim@bunjang.co.kr", ""),
+    GcloudConfig("infra", "infra@bunjang.co.kr", ""),
+]
+
+
+def test_validate_selection_by_number():
+    assert validate_selection("2", CONFIGS) == CONFIGS[1]
+
+
+def test_validate_selection_out_of_range():
+    assert validate_selection("9", CONFIGS) is None
+
+
+def test_validate_selection_exact_name():
+    assert validate_selection("infra", CONFIGS) == CONFIGS[1]
+
+
+def test_validate_selection_unique_partial():
+    assert validate_selection("inf", CONFIGS) == CONFIGS[1]
+
+
+def test_validate_selection_invalid():
+    assert validate_selection("zzz", CONFIGS) is None

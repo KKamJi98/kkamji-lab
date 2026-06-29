@@ -6,8 +6,10 @@ import sys
 from typing import Optional
 
 from rich.console import Console
+from rich.table import Table
 
 from gcloud_pick import __version__
+from gcloud_pick.config import GcloudConfig, adc_exists
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -41,6 +43,69 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         version=f"%(prog)s {__version__}",
     )
     return parser.parse_args(argv)
+
+
+def display_configurations(configs: list[GcloudConfig], current: Optional[str]) -> None:
+    """Render the available gcloud configurations as a table to stderr."""
+    table = Table(title="gcloud configurations", show_header=True, header_style="bold cyan")
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Config", style="green")
+    table.add_column("Account", style="white")
+    table.add_column("Project", style="dim")
+    table.add_column("ADC", justify="center", width=5)
+
+    for idx, cfg in enumerate(configs, 1):
+        active = cfg.name == current
+        marker = "[bold green]*[/bold green]" if active else ""
+        name_style = "bold green" if active else "green"
+        adc_mark = "[green]ok[/green]" if adc_exists(cfg.account) else "[red]-[/red]"
+        table.add_row(
+            f"{idx}{marker}",
+            f"[{name_style}]{cfg.name}[/{name_style}]",
+            cfg.account or "[dim](none)[/dim]",
+            cfg.project or "",
+            adc_mark,
+        )
+    console.print(table)
+    console.print("[dim]* = current. ADC ok = saved per-account file exists.[/dim]")
+
+
+def validate_selection(selection: str, configs: list[GcloudConfig]) -> Optional[GcloudConfig]:
+    """Resolve a selection (number, exact name, or unique partial) to a config."""
+    selection = selection.strip()
+    if not selection:
+        return None
+    try:
+        idx = int(selection)
+        if 1 <= idx <= len(configs):
+            return configs[idx - 1]
+        return None
+    except ValueError:
+        pass
+    for cfg in configs:
+        if cfg.name == selection or cfg.name.lower() == selection.lower():
+            return cfg
+    matches = [c for c in configs if selection.lower() in c.name.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def get_user_selection(configs: list[GcloudConfig]) -> Optional[GcloudConfig]:
+    """Prompt for a configuration selection (number or name)."""
+    while True:
+        try:
+            print("Select config (number/name, q to quit): ", end="", file=sys.stderr, flush=True)
+            raw = input().strip()
+            if not raw or raw.lower() in ("q", "quit", "exit"):
+                return None
+            cfg = validate_selection(raw, configs)
+            if cfg:
+                return cfg
+            console.print("[red]Invalid selection.[/red]")
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[yellow]Cancelled.[/yellow]")
+            return None
 
 
 def main(argv: Optional[list[str]] = None) -> int:
