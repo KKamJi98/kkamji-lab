@@ -1,7 +1,9 @@
 import pytest
 
+from gcloud_pick import cli as climod
 from gcloud_pick.cli import get_user_selection, parse_args, validate_selection
 from gcloud_pick.config import GcloudConfig
+from tests.conftest import write_config
 
 
 def test_parse_args_positional_config():
@@ -81,3 +83,44 @@ def test_get_user_selection_eof_cancels(monkeypatch):
 
     monkeypatch.setattr("builtins.input", _raise)
     assert get_user_selection(CONFIGS) is None
+
+
+def test_main_direct_switch_with_adc(fake_gcloud_home, capsys):
+    write_config(fake_gcloud_home, "infra", account="infra@bunjang.co.kr")
+    adc = fake_gcloud_home / "adc" / "infra@bunjang.co.kr.json"
+    adc.parent.mkdir(parents=True)
+    adc.write_text("{}")
+
+    rc = climod.main(["infra"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert 'export CLOUDSDK_ACTIVE_CONFIG_NAME="infra"' in out
+    assert f'export GOOGLE_APPLICATION_CREDENTIALS="{adc}"' in out
+
+
+def test_main_direct_switch_without_adc_unsets(fake_gcloud_home, capsys):
+    write_config(fake_gcloud_home, "default", account="ethan.kim@bunjang.co.kr")
+    rc = climod.main(["default"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert 'export CLOUDSDK_ACTIVE_CONFIG_NAME="default"' in out
+    assert "unset GOOGLE_APPLICATION_CREDENTIALS" in out
+
+
+def test_main_unknown_config_errors(fake_gcloud_home, capsys):
+    write_config(fake_gcloud_home, "infra", account="infra@bunjang.co.kr")
+    rc = climod.main(["nope"])
+    assert rc == 1
+    assert capsys.readouterr().out == ""  # nothing on stdout
+
+
+def test_main_no_configs_errors(fake_gcloud_home):
+    assert climod.main([]) == 1
+
+
+def test_main_interactive_uses_selection(fake_gcloud_home, capsys, monkeypatch):
+    write_config(fake_gcloud_home, "infra", account="infra@bunjang.co.kr")
+    monkeypatch.setattr(climod, "get_user_selection", lambda configs: configs[0])
+    rc = climod.main([])
+    assert rc == 0
+    assert 'CLOUDSDK_ACTIVE_CONFIG_NAME="infra"' in capsys.readouterr().out

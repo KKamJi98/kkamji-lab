@@ -9,7 +9,14 @@ from rich.console import Console
 from rich.table import Table
 
 from gcloud_pick import __version__
-from gcloud_pick.config import GcloudConfig, adc_exists
+from gcloud_pick.config import (
+    GcloudConfig,
+    adc_exists,
+    adc_path_for,
+    current_config,
+    list_configurations,
+)
+from gcloud_pick.shell import generate_export_commands, write_shared_profile
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -108,12 +115,60 @@ def get_user_selection(configs: list[GcloudConfig]) -> Optional[GcloudConfig]:
             return None
 
 
+def _do_login(config_name: str) -> int:
+    console.print("[yellow]--login not implemented yet[/yellow]")
+    return 1
+
+
+def _switch(cfg: GcloudConfig) -> int:
+    """Write the shared profile and print export commands for a configuration."""
+    if cfg.account and adc_exists(cfg.account):
+        adc_path = adc_path_for(cfg.account)
+    else:
+        adc_path = None
+        console.print(
+            f"[yellow]No saved ADC file for account '{cfg.account or '(none)'}'. "
+            f"ADC will fall back to the default credentials.[/yellow]"
+        )
+        console.print(f"[dim]Run 'gp --login {cfg.name}' to create one.[/dim]")
+
+    write_shared_profile(cfg.name, adc_path)
+    print(generate_export_commands(cfg.name, adc_path))
+
+    account = cfg.account or "(none)"
+    console.print(f"[green]Switched to[/green] [bold]{cfg.name}[/bold] [dim]({account})[/dim]")
+    console.print("[dim]Other terminals sync on next prompt.[/dim]")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Main entry point for the CLI."""
     try:
-        parse_args(argv)
-        console.print("[yellow]gcloud-pick: not implemented yet[/yellow]")
-        return 0
+        args = parse_args(argv)
+
+        if args.login is not None:
+            return _do_login(args.login)
+
+        configs = list_configurations()
+        if not configs:
+            console.print("[red]No gcloud configurations found.[/red]")
+            console.print("[dim]Create one with: gcloud config configurations create <name>[/dim]")
+            return 1
+
+        if args.config:
+            cfg = validate_selection(args.config, configs)
+            if cfg is None:
+                console.print(f"[red]Unknown configuration: {args.config}[/red]")
+                return 1
+            return _switch(cfg)
+
+        display_configurations(configs, current_config())
+        cfg = get_user_selection(configs)
+        if cfg is None:
+            logger.info("No selection made")
+            return 1
+        return _switch(cfg)
+
     except Exception as e:  # noqa: BLE001
         console.print(f"[red]Error: {e}[/red]")
         logger.exception("Unexpected error")
