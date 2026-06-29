@@ -3,6 +3,7 @@
 import logging
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -62,3 +63,43 @@ def generate_export_commands(
     else:
         lines.append(_unset_line(shell, "GOOGLE_APPLICATION_CREDENTIALS"))
     return "\n".join(lines)
+
+
+def shared_profile_path() -> Path:
+    """Path to the cross-shell profile file read by the precmd sync hook."""
+    return Path.home() / ".config" / "gcloudpick" / "profile"
+
+
+def _atomic_write_text(target: Path, content: str) -> None:
+    fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def write_shared_profile(config_name: str, adc_path: Optional[Path]) -> Path:
+    """Write '<config>\n<adc-path-or-empty>\n' atomically for cross-shell sync."""
+    path = shared_profile_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    second = str(adc_path) if adc_path is not None else ""
+    _atomic_write_text(path, f"{config_name}\n{second}\n")
+    return path
+
+
+def read_shared_profile() -> tuple[Optional[str], Optional[str]]:
+    """Read (config_name, adc_path) from the shared profile file."""
+    path = shared_profile_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None, None
+    config_name = lines[0].strip() if lines else ""
+    adc = lines[1].strip() if len(lines) > 1 else ""
+    return (config_name or None), adc

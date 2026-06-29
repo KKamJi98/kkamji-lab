@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from gcloud_pick.shell import generate_export_commands, normalize_shell
+from gcloud_pick.shell import (
+    generate_export_commands,
+    normalize_shell,
+    read_shared_profile,
+    shared_profile_path,
+    write_shared_profile,
+)
 
 
 def test_normalize_shell():
@@ -30,3 +36,18 @@ def test_export_fish_syntax():
     assert out == (
         'set -gx CLOUDSDK_ACTIVE_CONFIG_NAME "infra"\nset -e GOOGLE_APPLICATION_CREDENTIALS'
     )
+
+
+def test_shared_profile_roundtrip_with_adc(fake_gcloud_home):
+    path = write_shared_profile("infra", Path("/h/adc/infra@x.json"))
+    assert path == shared_profile_path()
+    assert read_shared_profile() == ("infra", "/h/adc/infra@x.json")
+
+
+def test_shared_profile_roundtrip_without_adc(fake_gcloud_home):
+    write_shared_profile("default", None)
+    assert read_shared_profile() == ("default", "")
+
+
+def test_read_shared_profile_missing_returns_none(fake_gcloud_home):
+    assert read_shared_profile() == (None, None)
