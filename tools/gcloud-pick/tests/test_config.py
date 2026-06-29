@@ -63,9 +63,15 @@ def test_resolve_service_account_uses_client_email(fake_gcloud_home, tmp_path):
 def test_resolve_user_cred_uses_token_introspection(fake_gcloud_home, tmp_path, monkeypatch):
     adc = tmp_path / "user.json"
     adc.write_text(json.dumps({"type": "authorized_user", "refresh_token": "x"}))
+    received = []
     monkeypatch.setattr(cfgmod, "_print_adc_access_token", lambda: "tok123")
-    monkeypatch.setattr(cfgmod, "_tokeninfo_email", lambda token: "ethan.kim@bunjang.co.kr")
+    monkeypatch.setattr(
+        cfgmod,
+        "_tokeninfo_email",
+        lambda token: received.append(token) or "ethan.kim@bunjang.co.kr",
+    )
     assert resolve_adc_account(adc) == "ethan.kim@bunjang.co.kr"
+    assert received == ["tok123"]
 
 
 def test_resolve_returns_none_when_token_fails(fake_gcloud_home, tmp_path, monkeypatch):
