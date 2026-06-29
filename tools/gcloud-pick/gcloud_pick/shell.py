@@ -102,4 +102,4 @@ def read_shared_profile() -> tuple[Optional[str], Optional[str]]:
         return None, None
     config_name = lines[0].strip() if lines else ""
     adc = lines[1].strip() if len(lines) > 1 else ""
-    return (config_name or None), adc
+    return (config_name or None), (adc or None)

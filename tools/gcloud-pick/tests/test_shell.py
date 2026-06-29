@@ -46,7 +46,7 @@ def test_shared_profile_roundtrip_with_adc(fake_gcloud_home):
 
 def test_shared_profile_roundtrip_without_adc(fake_gcloud_home):
     write_shared_profile("default", None)
-    assert read_shared_profile() == ("default", "")
+    assert read_shared_profile() == ("default", None)
 
 
 def test_read_shared_profile_missing_returns_none(fake_gcloud_home):
