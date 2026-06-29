@@ -1,3 +1,5 @@
+import json as _json
+
 import pytest
 
 from gcloud_pick import cli as climod
@@ -124,3 +126,43 @@ def test_main_interactive_uses_selection(fake_gcloud_home, capsys, monkeypatch):
     rc = climod.main([])
     assert rc == 0
     assert 'CLOUDSDK_ACTIVE_CONFIG_NAME="infra"' in capsys.readouterr().out
+
+
+def test_do_login_saves_per_account_adc(fake_gcloud_home, monkeypatch):
+    default_adc = fake_gcloud_home / "application_default_credentials.json"
+    default_adc.write_text(_json.dumps({"type": "authorized_user", "refresh_token": "r"}))
+
+    monkeypatch.setattr(climod, "_run_adc_login", lambda: 0)
+    monkeypatch.setattr(climod, "resolve_adc_account", lambda f: "ethan.kim@bunjang.co.kr")
+
+    rc = climod.main(["--login"])
+    assert rc == 0
+    saved = fake_gcloud_home / "adc" / "ethan.kim@bunjang.co.kr.json"
+    assert saved.is_file()
+    assert _json.loads(saved.read_text())["type"] == "authorized_user"
+    assert (saved.stat().st_mode & 0o777) == 0o600
+
+
+def test_do_login_warns_on_account_mismatch(fake_gcloud_home, monkeypatch, capsys):
+    write_config(fake_gcloud_home, "infra", account="infra@bunjang.co.kr")
+    default_adc = fake_gcloud_home / "application_default_credentials.json"
+    default_adc.write_text(_json.dumps({"type": "authorized_user"}))
+    monkeypatch.setattr(climod, "_run_adc_login", lambda: 0)
+    monkeypatch.setattr(climod, "resolve_adc_account", lambda f: "ethan.kim@bunjang.co.kr")
+
+    rc = climod.main(["--login", "infra"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "mismatch" in err.lower() or "infra@bunjang.co.kr" in err
+
+
+def test_do_login_fails_when_login_aborts(fake_gcloud_home, monkeypatch):
+    monkeypatch.setattr(climod, "_run_adc_login", lambda: 1)
+    assert climod.main(["--login"]) == 1
+
+
+def test_do_login_fails_when_account_unresolved(fake_gcloud_home, monkeypatch):
+    (fake_gcloud_home / "application_default_credentials.json").write_text("{}")
+    monkeypatch.setattr(climod, "_run_adc_login", lambda: 0)
+    monkeypatch.setattr(climod, "resolve_adc_account", lambda f: None)
+    assert climod.main(["--login"]) == 1

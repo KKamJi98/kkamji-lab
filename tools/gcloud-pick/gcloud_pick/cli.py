@@ -2,6 +2,9 @@
 
 import argparse
 import logging
+import os
+import shutil
+import subprocess
 import sys
 from typing import Optional
 
@@ -14,7 +17,9 @@ from gcloud_pick.config import (
     adc_exists,
     adc_path_for,
     current_config,
+    gcloud_dir,
     list_configurations,
+    resolve_adc_account,
 )
 from gcloud_pick.shell import generate_export_commands, write_shared_profile
 
@@ -115,9 +120,46 @@ def get_user_selection(configs: list[GcloudConfig]) -> Optional[GcloudConfig]:
             return None
 
 
+def _run_adc_login() -> int:
+    """Run the interactive ADC login. Returns the gcloud exit code."""
+    try:
+        result = subprocess.run(
+            ["gcloud", "auth", "application-default", "login"],
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        console.print(f"[red]Failed to run gcloud: {e}[/red]")
+        return 1
+    return result.returncode
+
+
 def _do_login(config_name: str) -> int:
-    console.print("[yellow]--login not implemented yet[/yellow]")
-    return 1
+    """Run ADC login and save a per-account ADC file."""
+    if _run_adc_login() != 0:
+        console.print("[red]ADC login failed or was cancelled.[/red]")
+        return 1
+
+    default_adc = gcloud_dir() / "application_default_credentials.json"
+    account = resolve_adc_account(default_adc)
+    if not account:
+        console.print("[red]Could not resolve the ADC account after login.[/red]")
+        return 1
+
+    if config_name:
+        cfg = validate_selection(config_name, list_configurations())
+        if cfg and cfg.account and cfg.account != account:
+            console.print(
+                f"[yellow]Account mismatch: ADC logged in as {account}, "
+                f"but config '{config_name}' uses {cfg.account}.[/yellow]"
+            )
+
+    dest = adc_path_for(account)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(dest.parent, 0o700)
+    shutil.copy2(default_adc, dest)
+    os.chmod(dest, 0o600)
+    console.print(f"[green]Saved ADC for {account}[/green] [dim]-> {dest}[/dim]")
+    return 0
 
 
 def _switch(cfg: GcloudConfig) -> int:
