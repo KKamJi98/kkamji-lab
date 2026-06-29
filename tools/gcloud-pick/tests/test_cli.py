@@ -141,6 +141,7 @@ def test_do_login_saves_per_account_adc(fake_gcloud_home, monkeypatch):
     assert saved.is_file()
     assert _json.loads(saved.read_text())["type"] == "authorized_user"
     assert (saved.stat().st_mode & 0o777) == 0o600
+    assert (saved.parent.stat().st_mode & 0o777) == 0o700
 
 
 def test_do_login_warns_on_account_mismatch(fake_gcloud_home, monkeypatch, capsys):
