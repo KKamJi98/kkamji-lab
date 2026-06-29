@@ -1,6 +1,6 @@
 import pytest
 
-from gcloud_pick.cli import parse_args, validate_selection
+from gcloud_pick.cli import get_user_selection, parse_args, validate_selection
 from gcloud_pick.config import GcloudConfig
 
 
@@ -52,3 +52,32 @@ def test_validate_selection_unique_partial():
 
 def test_validate_selection_invalid():
     assert validate_selection("zzz", CONFIGS) is None
+
+
+def test_get_user_selection_valid_number(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda: "2")
+    assert get_user_selection(CONFIGS) == CONFIGS[1]
+
+
+def test_get_user_selection_quit_cancels(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda: "q")
+    assert get_user_selection(CONFIGS) is None
+
+
+def test_get_user_selection_empty_cancels(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda: "")
+    assert get_user_selection(CONFIGS) is None
+
+
+def test_get_user_selection_reprompts_on_invalid(monkeypatch):
+    answers = iter(["zzz", "infra"])
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
+    assert get_user_selection(CONFIGS) == CONFIGS[1]
+
+
+def test_get_user_selection_eof_cancels(monkeypatch):
+    def _raise():
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", _raise)
+    assert get_user_selection(CONFIGS) is None
