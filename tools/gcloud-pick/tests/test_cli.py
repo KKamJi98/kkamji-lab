@@ -100,12 +100,50 @@ def test_main_direct_switch_with_adc(fake_gcloud_home, capsys):
     assert f'export GOOGLE_APPLICATION_CREDENTIALS="{adc}"' in out
 
 
-def test_main_direct_switch_without_adc_unsets(fake_gcloud_home, capsys):
+def test_main_direct_switch_without_adc_unsets(fake_gcloud_home, capsys, monkeypatch):
     write_config(fake_gcloud_home, "default", account="ethan.kim@bunjang.co.kr")
+    monkeypatch.setattr(climod, "_prompt_yes_no", lambda q: False)
     rc = climod.main(["default"])
     assert rc == 0
     out = capsys.readouterr().out
     assert 'export CLOUDSDK_ACTIVE_CONFIG_NAME="default"' in out
+    assert "unset GOOGLE_APPLICATION_CREDENTIALS" in out
+
+
+def test_main_switch_prompts_login_and_matches(fake_gcloud_home, capsys, monkeypatch):
+    write_config(fake_gcloud_home, "default", account="ethan.kim@bunjang.co.kr")
+
+    from gcloud_pick.config import adc_path_for
+
+    def _fake_do_login(config_name):
+        adc = adc_path_for("ethan.kim@bunjang.co.kr")
+        adc.parent.mkdir(parents=True, exist_ok=True)
+        adc.write_text("{}")
+        return 0
+
+    monkeypatch.setattr(climod, "_prompt_yes_no", lambda q: True)
+    monkeypatch.setattr(climod, "_do_login", _fake_do_login)
+
+    rc = climod.main(["default"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert 'export CLOUDSDK_ACTIVE_CONFIG_NAME="default"' in out
+    adc_path = adc_path_for("ethan.kim@bunjang.co.kr")
+    assert f'export GOOGLE_APPLICATION_CREDENTIALS="{adc_path}"' in out
+
+
+def test_main_switch_login_declined_or_failed_unsets(fake_gcloud_home, capsys, monkeypatch):
+    write_config(fake_gcloud_home, "default", account="ethan.kim@bunjang.co.kr")
+
+    def _fake_do_login_no_file(config_name):
+        return 0
+
+    monkeypatch.setattr(climod, "_prompt_yes_no", lambda q: True)
+    monkeypatch.setattr(climod, "_do_login", _fake_do_login_no_file)
+
+    rc = climod.main(["default"])
+    assert rc == 0
+    out = capsys.readouterr().out
     assert "unset GOOGLE_APPLICATION_CREDENTIALS" in out
 
 
@@ -123,6 +161,7 @@ def test_main_no_configs_errors(fake_gcloud_home):
 def test_main_interactive_uses_selection(fake_gcloud_home, capsys, monkeypatch):
     write_config(fake_gcloud_home, "infra", account="infra@bunjang.co.kr")
     monkeypatch.setattr(climod, "get_user_selection", lambda configs: configs[0])
+    monkeypatch.setattr(climod, "_prompt_yes_no", lambda q: False)
     rc = climod.main([])
     assert rc == 0
     assert 'CLOUDSDK_ACTIVE_CONFIG_NAME="infra"' in capsys.readouterr().out

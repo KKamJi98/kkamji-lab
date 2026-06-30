@@ -50,6 +50,10 @@ Each switch sets `CLOUDSDK_ACTIVE_CONFIG_NAME` and `GOOGLE_APPLICATION_CREDENTIA
 (to `~/.config/gcloud/adc/<account>.json`), or unsets the latter when no saved ADC
 file exists yet.
 
+If no per-account ADC file is found on switch, `gp` will ask interactively whether
+to run the ADC login immediately (keeping CLI auth and ADC matched in one step).
+Decline or run in a non-interactive context to fall back with a warning instead.
+
 ## ADC files
 
 `gp --login` saves the ADC credential to `~/.config/gcloud/adc/<account>.json`

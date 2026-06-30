@@ -120,6 +120,16 @@ def get_user_selection(configs: list[GcloudConfig]) -> Optional[GcloudConfig]:
             return None
 
 
+def _prompt_yes_no(question: str) -> bool:
+    """Print question to stderr, return True only if user answers y/yes. Safe in non-interactive contexts."""
+    try:
+        print(f"{question} [y/N]: ", end="", file=sys.stderr, flush=True)
+        answer = input().strip().lower()
+        return answer in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
 def _run_adc_login() -> int:
     """Run the interactive ADC login. Returns the gcloud exit code."""
     try:
@@ -166,6 +176,15 @@ def _switch(cfg: GcloudConfig) -> int:
     """Write the shared profile and print export commands for a configuration."""
     if cfg.account and adc_exists(cfg.account):
         adc_path = adc_path_for(cfg.account)
+    elif cfg.account and _prompt_yes_no(f"Set up ADC for {cfg.account} now? (opens gcloud login)"):
+        _do_login(cfg.name)
+        if adc_exists(cfg.account):
+            adc_path = adc_path_for(cfg.account)
+        else:
+            adc_path = None
+            console.print(
+                "[yellow]ADC login did not produce a matching credential. Falling back to default ADC.[/yellow]"
+            )
     else:
         adc_path = None
         console.print(
