@@ -132,7 +132,7 @@ def test_main_switch_prompts_login_and_matches(fake_gcloud_home, capsys, monkeyp
     assert f'export GOOGLE_APPLICATION_CREDENTIALS="{adc_path}"' in out
 
 
-def test_main_switch_login_declined_or_failed_unsets(fake_gcloud_home, capsys, monkeypatch):
+def test_main_switch_login_no_matching_file_unsets(fake_gcloud_home, capsys, monkeypatch):
     write_config(fake_gcloud_home, "default", account="ethan.kim@bunjang.co.kr")
 
     def _fake_do_login_no_file(config_name):
