@@ -29,8 +29,10 @@ prj open
 # Use a specific remote
 prj open --remote origin
 
-# Override base or head branch
-prj open --base main --head feature/my-branch
+# Override target (merge into) or source (merge from) branch
+# short flags: -t/--target, -s/--source
+prj open --target main --source feature/my-branch
+prj open -t main -s feature/my-branch
 
 # Force provider if auto-detection fails
 prj open --provider github
@@ -42,5 +44,5 @@ prj open --print
 
 Notes:
 - Run inside a git repository with the target remote configured.
-- For Bitbucket Cloud, `--base` adds a `dest` query parameter as a best-effort
+- For Bitbucket Cloud, `--target` adds a `dest` query parameter as a best-effort
   preselection. If the UI ignores it, choose the destination branch manually.

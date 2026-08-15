@@ -10,6 +10,7 @@ from pull_request_jump.cli import (
     PrOpenError,
     RemoteInfo,
     get_default_branch,
+    parse_args,
     parse_remote_url,
     resolve_provider,
 )
@@ -212,3 +213,33 @@ def test_resolve_provider_subdomain_github_enterprise():
     provider = resolve_provider(remote, override=None)
 
     assert provider.name == "github"
+
+
+# ---------------------------------------------------------------------------
+# parse_args (short flags)
+# ---------------------------------------------------------------------------
+
+
+def test_open_short_flags_map_to_target_and_source():
+    """-t/-s 축약 플래그가 각각 --target/--source로 매핑돼야 한다."""
+    args = parse_args(["open", "-t", "main", "-s", "feature/x"])
+
+    assert args.target == "main"
+    assert args.source == "feature/x"
+
+
+def test_open_long_flags_work():
+    """--target/--source 롱 플래그도 동작해야 한다."""
+    args = parse_args(["open", "--target", "develop", "--source", "topic"])
+
+    assert args.target == "develop"
+    assert args.source == "topic"
+
+
+@pytest.mark.parametrize("help_flag", ["-h", "--help"])
+def test_open_help_flags_exit_zero(help_flag):
+    """-h/--help 모두 help로 동작해 SystemExit(0)를 내야 한다."""
+    with pytest.raises(SystemExit) as exc:
+        parse_args(["open", help_flag])
+
+    assert exc.value.code == 0

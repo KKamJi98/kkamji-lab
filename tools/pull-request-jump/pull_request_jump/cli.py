@@ -37,7 +37,7 @@ class GitHubProvider(Provider):
 
     def build_pr_url(self, remote: RemoteInfo, base: str | None, head: str) -> str:
         if not base:
-            raise PrOpenError("GitHub requires a base branch. Use --base to specify one.")
+            raise PrOpenError("GitHub requires a target branch. Use --target to specify one.")
         base_enc = quote(base, safe="")
         head_enc = quote(head, safe="")
         return (
@@ -128,7 +128,7 @@ def get_current_branch() -> str:
         raise PrOpenError("Failed to detect current branch.")
     branch = result.stdout.strip()
     if branch == "HEAD":
-        raise PrOpenError("Detached HEAD. Use --head to specify a branch.")
+        raise PrOpenError("Detached HEAD. Use --source to specify a branch.")
     return branch
 
 
@@ -153,7 +153,7 @@ def get_default_branch(remote: str) -> str:
         if remote_branch_exists(remote, branch):
             return branch
 
-    raise PrOpenError("Unable to determine default branch. Use --base to specify one.")
+    raise PrOpenError("Unable to determine default branch. Use --target to specify one.")
 
 
 def resolve_provider(remote: RemoteInfo, override: str | None) -> Provider:
@@ -179,13 +179,13 @@ def cmd_open(args: argparse.Namespace) -> int:
     remote = parse_remote_url(remote_url)
     provider = resolve_provider(remote, args.provider)
 
-    head = args.head or get_current_branch()
+    head = args.source or get_current_branch()
 
     base: str | None = None
     if provider.name == "github":
-        base = args.base or get_default_branch(args.remote)
+        base = args.target or get_default_branch(args.remote)
     else:
-        base = args.base
+        base = args.target
 
     url = provider.build_pr_url(remote, base, head)
 
@@ -215,8 +215,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     open_parser = subparsers.add_parser("open", help="Open a pull request page")
     open_parser.add_argument("--remote", default="origin", help="Git remote name")
-    open_parser.add_argument("--base", help="Base branch (target branch)")
-    open_parser.add_argument("--head", help="Head branch (source branch)")
+    open_parser.add_argument(
+        "-t",
+        "--target",
+        help="Target branch to merge into (GitHub base branch)",
+    )
+    open_parser.add_argument(
+        "-s",
+        "--source",
+        help="Source branch to merge from (defaults to current branch)",
+    )
     open_parser.add_argument(
         "--provider",
         choices=sorted(PROVIDERS.keys()),
