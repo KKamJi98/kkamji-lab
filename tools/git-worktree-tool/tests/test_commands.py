@@ -35,6 +35,24 @@ def _make_worktrees(tmp_path: Path, specs: list[dict]) -> list[Worktree]:
     return worktrees
 
 
+def _populate_with(*, dirty=(), no_upstream=(), sync="="):
+    """Return a populate_status replacement that fills cache fields directly.
+
+    cmd_status now probes each worktree via populate_status (one git call); the
+    accessors then read the cached fields, so tests control that single source.
+    """
+    dirty_set = set(dirty)
+    no_upstream_set = set(no_upstream)
+
+    def _populate(wt):
+        wt._dirty = wt.branch in dirty_set
+        has_up = wt.branch not in no_upstream_set
+        wt._has_upstream = has_up
+        wt._sync_status = sync if (has_up and not wt.is_detached) else None
+
+    return _populate
+
+
 # ──────────────────────────────── cmd_status ────────────────────────────────
 
 
@@ -48,9 +66,7 @@ class TestCmdStatus:
             ],
         )
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
-        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
-        monkeypatch.setattr(cli, "has_upstream", lambda wt: True)
-        monkeypatch.setattr(cli, "get_sync_status", lambda wt: "=")
+        monkeypatch.setattr(cli, "populate_status", _populate_with())
         cli.Color.init()
 
         result = cli.cmd_status(tmp_path)
@@ -63,9 +79,7 @@ class TestCmdStatus:
     def test_dirty_worktree_returns_2(self, tmp_path, monkeypatch, capsys) -> None:
         wts = _make_worktrees(tmp_path, [{"branch": "main"}, {"branch": "feat"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
-        monkeypatch.setattr(cli, "is_dirty", lambda wt: wt.branch == "feat")
-        monkeypatch.setattr(cli, "has_upstream", lambda wt: True)
-        monkeypatch.setattr(cli, "get_sync_status", lambda wt: "=")
+        monkeypatch.setattr(cli, "populate_status", _populate_with(dirty={"feat"}))
         cli.Color.init()
 
         result = cli.cmd_status(tmp_path)
@@ -77,8 +91,7 @@ class TestCmdStatus:
     def test_no_upstream_shown(self, tmp_path, monkeypatch, capsys) -> None:
         wts = _make_worktrees(tmp_path, [{"branch": "main"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
-        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
-        monkeypatch.setattr(cli, "has_upstream", lambda wt: False)
+        monkeypatch.setattr(cli, "populate_status", _populate_with(no_upstream={"main"}))
         cli.Color.init()
 
         cli.cmd_status(tmp_path)
@@ -89,7 +102,7 @@ class TestCmdStatus:
     def test_detached_shown(self, tmp_path, monkeypatch, capsys) -> None:
         wts = _make_worktrees(tmp_path, [{"branch": "(detached abc1234)", "is_detached": True}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
-        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "populate_status", _populate_with())
         cli.Color.init()
 
         cli.cmd_status(tmp_path)
@@ -108,9 +121,7 @@ class TestCmdStatus:
     def test_json_output(self, tmp_path, monkeypatch, capsys) -> None:
         wts = _make_worktrees(tmp_path, [{"branch": "main"}, {"branch": "feat"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
-        monkeypatch.setattr(cli, "is_dirty", lambda wt: wt.branch == "feat")
-        monkeypatch.setattr(cli, "has_upstream", lambda wt: True)
-        monkeypatch.setattr(cli, "get_sync_status", lambda wt: "=")
+        monkeypatch.setattr(cli, "populate_status", _populate_with(dirty={"feat"}))
 
         result = cli.cmd_status(tmp_path, json_output=True)
 
@@ -347,6 +358,33 @@ class TestCmdPull:
 
         assert result == 1
 
+    def test_parallel_output_is_grouped_and_ordered(self, tmp_path, monkeypatch, capsys) -> None:
+        """With multiple worktrees synced concurrently, each worktree's lines
+        stay grouped together and in the original worktree order."""
+        wts = _make_worktrees(tmp_path, [{"branch": "main"}, {"branch": "feat"}, {"branch": "bug"}])
+        self._setup_pull(monkeypatch, tmp_path, wts, dirty_branches={"feat"}, no_upstream={"bug"})
+
+        def fake_run_git(args, cwd=None):
+            if args[:2] == ["rev-parse", "HEAD"]:
+                return _ok(stdout="same\n")
+            if args[:2] == ["merge", "--ff-only"]:
+                return _ok(stdout="Already up to date.\n")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+        cli.Color.init()
+
+        result = cli.cmd_pull(tmp_path)
+
+        assert result == 2  # skips present
+        out = capsys.readouterr().out
+        main_i, feat_i, bug_i = out.index("==> main"), out.index("==> feat"), out.index("==> bug")
+        assert main_i < feat_i < bug_i  # original order preserved
+        assert "already up to date" in out[main_i:feat_i]  # grouped with its worktree
+        assert "dirty working tree" in out[feat_i:bug_i]
+        assert "no upstream configured" in out[bug_i:]
+        assert "Summary: ok=1 skip=2 fail=0" in out
+
 
 # ──────────────────────────────── cmd_upstream ────────────────────────────────
 
@@ -364,6 +402,33 @@ class TestCmdUpstream:
         output = capsys.readouterr().out
         assert "upstream already set" in output
         assert "Summary: ok=0 skip=1 fail=0" in output
+
+    def test_sets_missing_upstream_serially_in_order(self, tmp_path, monkeypatch, capsys) -> None:
+        """Worktrees missing upstream get set (serial write); already-configured
+        ones are skipped. Output stays grouped and in worktree order."""
+        wts = _make_worktrees(tmp_path, [{"branch": "main"}, {"branch": "feat"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "has_upstream", lambda wt: wt.branch == "main")
+        monkeypatch.setattr(cli, "has_remote_branch", lambda repo, branch: True)
+
+        set_calls: list[list[str]] = []
+
+        def fake_run_git(args, cwd=None):
+            if args[:2] == ["branch", "--set-upstream-to"]:
+                set_calls.append(args)
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+        cli.Color.init()
+
+        result = cli.cmd_upstream(tmp_path)
+
+        assert result == 2  # one skip present
+        output = capsys.readouterr().out
+        assert output.index("==> main") < output.index("==> feat")
+        assert "upstream already set" in output
+        assert set_calls == [["branch", "--set-upstream-to", "origin/feat", "feat"]]
+        assert "Summary: ok=1 skip=1 fail=0" in output
 
 
 # ──────────────────────────────── cmd_add ────────────────────────────────
@@ -767,6 +832,9 @@ class TestCmdRemove:
     def test_remove_delete_branch_ls_remote_failure_blocks_force_delete(
         self, tmp_path, monkeypatch, capsys
     ) -> None:
+        """When the upfront fetch fails, refs are not fresh so remote existence
+        falls back to a live ls-remote; an ls-remote failure must block the
+        force delete rather than silently dropping the branch."""
         wts = _make_worktrees(tmp_path, [{"branch": "feat/auth"}])
         monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
         monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
@@ -778,13 +846,11 @@ class TestCmdRemove:
         def fake_run_git(args, cwd=None):
             calls.append(tuple(args))
             if args == ["fetch", "--all", "--prune"]:
-                return _ok()
+                return _fail(stderr="fatal: Authentication failed for 'origin'")
             if args[:2] == ["worktree", "remove"]:
                 return _ok()
             if args == ["branch", "-d", "feat/auth"]:
                 return _fail(stderr="error: The branch 'feat/auth' is not fully merged.")
-            if args == ["fetch", "--prune"]:
-                return _ok()
             if args == ["branch", "-r", "--merged", "origin/main"]:
                 return _ok(stdout="")
             if args == ["merge-base", "--is-ancestor", "feat/auth", "origin/main"]:
@@ -986,8 +1052,8 @@ class TestCmdRemove:
                 return _ok(stdout="")
             if args == ["merge-base", "--is-ancestor", "feat/TECH-4177", "origin/main"]:
                 return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
-            if args == ["ls-remote", "--heads", "origin", "feat/TECH-4177"]:
-                return _ok(stdout="")
+            if args == ["rev-parse", "--verify", "--quiet", "origin/feat/TECH-4177"]:
+                return _fail()  # remote-tracking ref pruned -> remote branch gone
             if args == ["merge-tree", "--write-tree", "origin/main", "feat/TECH-4177"]:
                 return _ok(stdout=TREE_SHA)
             if args == ["rev-parse", "origin/main^{tree}"]:
@@ -1034,8 +1100,8 @@ class TestCmdRemove:
                 return _ok(stdout="")
             if args == ["merge-base", "--is-ancestor", "feat/diverged", "origin/main"]:
                 return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
-            if args == ["ls-remote", "--heads", "origin", "feat/diverged"]:
-                return _ok(stdout="")
+            if args == ["rev-parse", "--verify", "--quiet", "origin/feat/diverged"]:
+                return _fail()  # remote-tracking ref pruned -> remote branch gone
             if args == ["merge-tree", "--write-tree", "origin/main", "feat/diverged"]:
                 return _ok(stdout="aaaa1111")
             if args == ["rev-parse", "origin/main^{tree}"]:
@@ -1087,8 +1153,8 @@ class TestCmdRemove:
                 return _ok(stdout="")
             if args == ["merge-base", "--is-ancestor", "fix/n8n-oauth2", "origin/master"]:
                 return CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
-            if args == ["ls-remote", "--heads", "origin", "fix/n8n-oauth2"]:
-                return _ok(stdout="")  # remote feature branch gone
+            if args == ["rev-parse", "--verify", "--quiet", "origin/fix/n8n-oauth2"]:
+                return _fail()  # remote-tracking ref pruned -> remote feature branch gone
             if args == ["branch", "-r", "--contains", "fix/n8n-oauth2"]:
                 return _ok(stdout="  origin/staging\n")
             if args[:2] == ["merge-tree", "--write-tree"]:
@@ -1162,6 +1228,88 @@ class TestCmdRemove:
         assert "skipping remote delete" in output
         assert "branch kept" in output
         assert ("push", "origin", "--delete", "feat/keep") not in calls
+
+    def test_remove_delete_branch_fresh_fetch_skips_ls_remote(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """After a successful prune-fetch the remote-tracking refs are
+        authoritative, so remote existence is checked via the local
+        origin/<branch> ref instead of a per-branch ls-remote network call."""
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/merged"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/main")
+        cli.Color.init()
+
+        def fake_run_git(args, cwd=None):
+            if args == ["fetch", "--all", "--prune"]:
+                return _ok()
+            if args[:2] == ["worktree", "remove"]:
+                return _ok()
+            if args == ["branch", "-d", "feat/merged"]:
+                return _fail(stderr="error: not fully merged")
+            if args == ["branch", "-r", "--merged", "origin/main"]:
+                return _ok(stdout="")
+            if args == ["merge-base", "--is-ancestor", "feat/merged", "origin/main"]:
+                return _ok()  # local tip IS an ancestor of origin/main
+            if args == ["rev-parse", "--verify", "--quiet", "origin/feat/merged"]:
+                return _fail()  # remote-tracking ref was pruned -> remote gone
+            if args == ["branch", "-D", "feat/merged"]:
+                return _ok()
+            if args[:1] == ["ls-remote"]:
+                raise AssertionError("ls-remote must not run on the fresh-fetch path")
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/merged"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 0
+        assert "remote branch gone, local merged" in capsys.readouterr().out
+
+    def test_remove_delete_multiple_branches_computes_merged_once(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """`git branch -r --merged <ref>` is invariant across branches, so it is
+        computed a single time, not once per branch."""
+        wts = _make_worktrees(tmp_path, [{"branch": "feat/a"}, {"branch": "feat/b"}])
+        monkeypatch.setattr(cli, "get_worktrees", lambda _: wts)
+        monkeypatch.setattr(cli, "is_dirty", lambda wt: False)
+        monkeypatch.setattr(cli, "get_default_remote_ref", lambda _: "origin/main")
+        cli.Color.init()
+
+        merged_calls: list[tuple[str, ...]] = []
+
+        def fake_run_git(args, cwd=None):
+            if args == ["branch", "-r", "--merged", "origin/main"]:
+                merged_calls.append(tuple(args))
+                return _ok(stdout="")
+            if args[:2] == ["branch", "-d"]:
+                return _fail(stderr="error: not fully merged")
+            if args[:3] == ["merge-base", "--is-ancestor"]:
+                return _ok()  # ancestor of origin/main
+            if args[:3] == ["rev-parse", "--verify", "--quiet"]:
+                return _fail()  # remote-tracking ref gone
+            return _ok()
+
+        monkeypatch.setattr(cli, "run_git", fake_run_git)
+
+        result = cli.cmd_remove(
+            tmp_path,
+            identifiers=["feat/a", "feat/b"],
+            force=False,
+            delete_branch=True,
+            yes=True,
+        )
+
+        assert result == 0
+        assert len(merged_calls) == 1
 
 
 # ─────────────────────── _delete_local_branch (unit) ───────────────────────

@@ -8,9 +8,12 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import TypeVar
 
 try:
     import argcomplete
@@ -55,6 +58,7 @@ class Worktree:
     _dirty: bool | None = field(default=None, repr=False, compare=False)
     _has_upstream: bool | None = field(default=None, repr=False, compare=False)
     _upstream_ref: str | None = field(default=None, repr=False, compare=False)
+    _sync_status: str | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,28 @@ def run_git(args: list[str], cwd: Path | None = None) -> subprocess.CompletedPro
         text=True,
         env=env,
     )
+
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+
+# Per-worktree git probes are I/O-bound (they block on a child git process,
+# which releases the GIL), so a thread pool gives real concurrency. Cap the
+# pool to avoid spawning an unbounded number of git processes on large repos.
+_PARALLEL_CAP = 16
+
+
+def _run_parallel(items: Iterable[_T], fn: Callable[[_T], _R]) -> list[_R]:
+    """Apply ``fn`` to each item concurrently, returning results in input order.
+
+    Falls back to a serial loop for 0 or 1 items to avoid thread-pool overhead.
+    """
+    items = list(items)
+    if len(items) <= 1:
+        return [fn(item) for item in items]
+    workers = min(len(items), _PARALLEL_CAP)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(fn, items))
 
 
 def find_bare_repo(start_path: Path | None = None) -> Path | None:
@@ -224,28 +250,86 @@ def has_git_ref(repo: Path, ref: str) -> bool:
     return result.returncode == 0
 
 
+def _sync_display(ahead: int, behind: int) -> str:
+    """Render an ahead/behind pair into the status display string."""
+    if ahead > 0 and behind > 0:
+        return f"↑{ahead} ↓{behind}"
+    if ahead > 0:
+        return f"↑{ahead}"
+    if behind > 0:
+        return f"↓{behind}"
+    return "="
+
+
+def _sync_status_from_ab(ab: str | None) -> str:
+    """Render a porcelain v2 branch.ab value (the form `+<ahead> -<behind>`).
+
+    Returns an empty string when the value is missing. Git omits branch.ab when
+    the upstream is configured but its remote-tracking ref is absent locally,
+    which matches the empty result the legacy rev-list probe produced there.
+    """
+    if not ab:
+        return ""
+    parts = ab.split()
+    if len(parts) != 2:
+        return ""
+    return _sync_display(int(parts[0]), -int(parts[1]))
+
+
+def populate_status(wt: Worktree) -> None:
+    """Fill dirty/upstream/sync state from a single git status call.
+
+    `git status --porcelain=v2 --branch` reports the dirty state, the configured
+    upstream, and the ahead/behind counts together, collapsing the separate
+    is_dirty / has_upstream / get_sync_status probes (three git invocations)
+    into one. Results are cached on the Worktree so the accessor functions
+    return them without further git calls.
+    """
+    result = run_git(["status", "--porcelain=v2", "--branch"], cwd=wt.path)
+    if result.returncode != 0:
+        # Treat unknown status as dirty so destructive commands skip safely.
+        wt._dirty = True
+        wt._has_upstream = False
+        wt._upstream_ref = None
+        wt._sync_status = ""
+        return
+
+    dirty = False
+    upstream: str | None = None
+    ab: str | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("# branch.upstream "):
+            upstream = line[len("# branch.upstream ") :].strip()
+        elif line.startswith("# branch.ab "):
+            ab = line[len("# branch.ab ") :].strip()
+        elif line and not line.startswith("#"):
+            dirty = True
+
+    wt._dirty = dirty
+    wt._upstream_ref = upstream
+    wt._has_upstream = upstream is not None
+    wt._sync_status = _sync_status_from_ab(ab) if upstream is not None else None
+
+
 def get_sync_status(wt: Worktree) -> str:
-    """Get sync status with upstream (ahead/behind)."""
+    """Get sync status with upstream (ahead/behind). Cached on the Worktree."""
     if wt.is_detached:
         return ""
+    if wt._sync_status is not None:
+        return wt._sync_status
     upstream_ref = get_upstream_ref(wt)
     if upstream_ref is None:
-        return ""
+        wt._sync_status = ""
+        return wt._sync_status
     result = run_git(
         ["rev-list", "--left-right", "--count", f"{wt.branch}...{upstream_ref}"], cwd=wt.path
     )
     if result.returncode != 0:
         return ""
     parts = result.stdout.strip().split()
-    if len(parts) == 2:
-        ahead, behind = int(parts[0]), int(parts[1])
-        if ahead > 0 and behind > 0:
-            return f"↑{ahead} ↓{behind}"
-        if ahead > 0:
-            return f"↑{ahead}"
-        if behind > 0:
-            return f"↓{behind}"
-    return "="
+    value = _sync_display(int(parts[0]), int(parts[1])) if len(parts) == 2 else "="
+    wt._sync_status = value
+    return value
 
 
 def colorize(text: str, color: str) -> str:
@@ -263,6 +347,10 @@ def cmd_status(bare_repo: Path, json_output: bool = False) -> int:
         else:
             print("No worktrees found.")
         return 1
+
+    # Probe every worktree's dirty/upstream/sync state concurrently, each in a
+    # single git call; the accessors below then read the cached results.
+    _run_parallel(worktrees, populate_status)
 
     if json_output:
         items = []
@@ -381,6 +469,64 @@ def cmd_prune(bare_repo: Path, dry_run: bool = False) -> int:
     return 0
 
 
+def _pull_one(wt: Worktree, rebase: bool) -> tuple[str, list[str]]:
+    """Sync a single worktree and return ``(category, output_lines)``.
+
+    ``category`` is ``"ok"``, ``"skip"`` or ``"fail"``. Output is buffered into
+    a line list rather than printed so concurrent worktrees never interleave.
+    Each worktree updates its own branch ref and working tree, so running these
+    across worktrees in parallel is safe.
+    """
+    lines = [f"\n==> {wt.branch} ({wt.path.name})"]
+
+    if wt.is_detached:
+        lines.append(f"  {Color.YELLOW}SKIP{Color.RESET} detached HEAD")
+        return "skip", lines
+
+    if is_dirty(wt):
+        lines.append(f"  {Color.YELLOW}SKIP{Color.RESET} dirty working tree")
+        return "skip", lines
+
+    upstream_ref = get_upstream_ref(wt)
+    if upstream_ref is None:
+        lines.append(f"  {Color.YELLOW}SKIP{Color.RESET} no upstream configured")
+        return "skip", lines
+
+    if not has_git_ref(wt.path, upstream_ref):
+        lines.append(f"  {Color.YELLOW}SKIP{Color.RESET} upstream ref not found {upstream_ref}")
+        return "skip", lines
+
+    # Snapshot HEAD before sync to detect actual changes
+    head_before = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
+
+    if rebase:
+        # Try rebase onto remote branch
+        result = run_git(["rebase", upstream_ref], cwd=wt.path)
+        if result.returncode == 0:
+            head_after = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
+            if head_before == head_after:
+                lines.append(f"  {Color.GREEN}OK{Color.RESET} already up to date")
+            else:
+                lines.append(f"  {Color.GREEN}OK{Color.RESET} rebased")
+            return "ok", lines
+        # Abort failed rebase
+        run_git(["rebase", "--abort"], cwd=wt.path)
+        lines.append(f"  {Color.RED}FAIL{Color.RESET} rebase failed (conflict?), aborted")
+        return "fail", lines
+
+    # Try fast-forward merge (default, safe)
+    result = run_git(["merge", "--ff-only", upstream_ref], cwd=wt.path)
+    if result.returncode == 0:
+        head_after = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
+        if head_before == head_after:
+            lines.append(f"  {Color.GREEN}OK{Color.RESET} already up to date")
+        else:
+            lines.append(f"  {Color.GREEN}OK{Color.RESET} fast-forwarded")
+        return "ok", lines
+    lines.append(f"  {Color.RED}FAIL{Color.RESET} cannot fast-forward (diverged?)")
+    return "fail", lines
+
+
 def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
     """Pull all worktrees (ff-only by default, rebase with --rebase)."""
     # First fetch
@@ -398,65 +544,21 @@ def cmd_pull(bare_repo: Path, rebase: bool = False) -> int:
         print("No worktrees found.")
         return 1
 
+    # Sync worktrees concurrently; output is buffered per worktree and printed
+    # in the original order so the log stays readable.
+    results = _run_parallel(worktrees, lambda wt: _pull_one(wt, rebase))
+
     ok_count = 0
     skip_count = 0
     fail_count = 0
-
-    for wt in worktrees:
-        print(f"\n==> {wt.branch} ({wt.path.name})")
-
-        if wt.is_detached:
-            print(f"  {Color.YELLOW}SKIP{Color.RESET} detached HEAD")
+    for category, lines in results:
+        print("\n".join(lines))
+        if category == "ok":
+            ok_count += 1
+        elif category == "skip":
             skip_count += 1
-            continue
-
-        if is_dirty(wt):
-            print(f"  {Color.YELLOW}SKIP{Color.RESET} dirty working tree")
-            skip_count += 1
-            continue
-
-        upstream_ref = get_upstream_ref(wt)
-        if upstream_ref is None:
-            print(f"  {Color.YELLOW}SKIP{Color.RESET} no upstream configured")
-            skip_count += 1
-            continue
-
-        if not has_git_ref(wt.path, upstream_ref):
-            print(f"  {Color.YELLOW}SKIP{Color.RESET} upstream ref not found {upstream_ref}")
-            skip_count += 1
-            continue
-
-        # Snapshot HEAD before sync to detect actual changes
-        head_before = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
-
-        if rebase:
-            # Try rebase onto remote branch
-            result = run_git(["rebase", upstream_ref], cwd=wt.path)
-            if result.returncode == 0:
-                head_after = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
-                if head_before == head_after:
-                    print(f"  {Color.GREEN}OK{Color.RESET} already up to date")
-                else:
-                    print(f"  {Color.GREEN}OK{Color.RESET} rebased")
-                ok_count += 1
-            else:
-                # Abort failed rebase
-                run_git(["rebase", "--abort"], cwd=wt.path)
-                print(f"  {Color.RED}FAIL{Color.RESET} rebase failed (conflict?), aborted")
-                fail_count += 1
         else:
-            # Try fast-forward merge (default, safe)
-            result = run_git(["merge", "--ff-only", upstream_ref], cwd=wt.path)
-            if result.returncode == 0:
-                head_after = run_git(["rev-parse", "HEAD"], cwd=wt.path).stdout.strip()
-                if head_before == head_after:
-                    print(f"  {Color.GREEN}OK{Color.RESET} already up to date")
-                else:
-                    print(f"  {Color.GREEN}OK{Color.RESET} fast-forwarded")
-                ok_count += 1
-            else:
-                print(f"  {Color.RED}FAIL{Color.RESET} cannot fast-forward (diverged?)")
-                fail_count += 1
+            fail_count += 1
 
     print()
     print(f"Summary: ok={ok_count} skip={skip_count} fail={fail_count}")
@@ -533,6 +635,27 @@ def _is_squash_merged(branch: str, target: str, bare_repo: Path) -> bool:
     return merge_tree == target_tree.stdout.strip()
 
 
+def _upstream_assess(bare_repo: Path, wt: Worktree) -> tuple[str, list[str]]:
+    """Read-only assessment of a worktree's upstream state.
+
+    Returns ``(action, lines)`` where ``action`` is ``"skip"`` or ``"set"``.
+    Only the read probes (has_upstream, has_remote_branch) run here so they can
+    be parallelised; the actual set-upstream write is applied serially by the
+    caller because git locks the shared config file.
+    """
+    lines = [f"==> {wt.branch}"]
+    if wt.is_detached:
+        lines.append(f"  {Color.YELLOW}SKIP{Color.RESET} detached HEAD")
+        return "skip", lines
+    if has_upstream(wt):
+        lines.append(f"  {Color.BLUE}SKIP{Color.RESET} upstream already set")
+        return "skip", lines
+    if not has_remote_branch(bare_repo, wt.branch):
+        lines.append(f"  {Color.YELLOW}SKIP{Color.RESET} no remote branch origin/{wt.branch}")
+        return "skip", lines
+    return "set", lines
+
+
 def cmd_upstream(bare_repo: Path) -> int:
     """Set upstream to origin/<branch> for all worktrees missing upstream."""
     worktrees = get_worktrees(bare_repo)
@@ -541,25 +664,19 @@ def cmd_upstream(bare_repo: Path) -> int:
         print("No worktrees found.")
         return 1
 
+    # Assess every worktree concurrently (read-only probes), then apply the
+    # set-upstream writes serially since they all mutate the shared config.
+    assessments = _run_parallel(worktrees, lambda wt: _upstream_assess(bare_repo, wt))
+
     ok_count = 0
     skip_count = 0
     fail_count = 0
 
-    for wt in worktrees:
-        print(f"==> {wt.branch}")
+    for wt, (action, lines) in zip(worktrees, assessments):
+        for line in lines:
+            print(line)
 
-        if wt.is_detached:
-            print(f"  {Color.YELLOW}SKIP{Color.RESET} detached HEAD")
-            skip_count += 1
-            continue
-
-        if has_upstream(wt):
-            print(f"  {Color.BLUE}SKIP{Color.RESET} upstream already set")
-            skip_count += 1
-            continue
-
-        if not has_remote_branch(bare_repo, wt.branch):
-            print(f"  {Color.YELLOW}SKIP{Color.RESET} no remote branch origin/{wt.branch}")
+        if action == "skip":
             skip_count += 1
             continue
 
@@ -1015,12 +1132,38 @@ def _remote_branches_containing(branch: str, bare_repo: Path) -> set[str]:
     }
 
 
+def _merged_remote_refs(bare_repo: Path, ref: str) -> set[str]:
+    """Remote-tracking refs already merged into ``ref``.
+
+    This is invariant across the branches being assessed, so callers compute it
+    once and pass it in rather than re-running ``git branch -r --merged`` per
+    branch. Returns an empty set on probe failure.
+    """
+    merged = run_git(["branch", "-r", "--merged", ref], cwd=bare_repo)
+    if merged.returncode != 0:
+        return set()
+    return {
+        line.strip().removeprefix("* ").strip()
+        for line in merged.stdout.splitlines()
+        if line.strip()
+    }
+
+
 def _assess_local_branch_delete(
     bare_repo: Path,
     branch: str,
     default_remote_ref: str | None,
+    merged_refs: set[str] | None = None,
+    refs_fresh: bool = False,
 ) -> BranchDeleteAssessment:
-    """Classify whether an unmerged branch can be safely force-deleted."""
+    """Classify whether an unmerged branch can be safely force-deleted.
+
+    ``merged_refs`` may be passed in to avoid recomputing the merged set per
+    branch. ``refs_fresh`` signals that the local remote-tracking refs are
+    up to date (the caller just ran ``fetch --prune``), so remote-branch
+    existence can be checked against the local ``origin/<branch>`` ref instead
+    of an extra ``ls-remote`` network round-trip.
+    """
     if default_remote_ref is None:
         return BranchDeleteAssessment(
             status="error",
@@ -1031,15 +1174,9 @@ def _assess_local_branch_delete(
         )
 
     ref = default_remote_ref
-    merged = run_git(["branch", "-r", "--merged", ref], cwd=bare_repo)
+    if merged_refs is None:
+        merged_refs = _merged_remote_refs(bare_repo, ref)
     remote_ref = f"origin/{branch}"
-    merged_refs: set[str] = set()
-    if merged.returncode == 0:
-        merged_refs = {
-            line.strip().removeprefix("* ").strip()
-            for line in merged.stdout.splitlines()
-            if line.strip()
-        }
     remote_merged = remote_ref in merged_refs
 
     # Force delete is allowed only when the local tip is already part of <ref>.
@@ -1059,17 +1196,22 @@ def _assess_local_branch_delete(
             reason=f"local branch has commits not in {ref}",
         )
 
-    # Remote branch not in merged list — check whether it still exists, but
-    # only trust ls-remote on success.
-    remote_exists = run_git(["ls-remote", "--heads", "origin", branch], cwd=bare_repo)
-    if remote_exists.returncode != 0:
-        return BranchDeleteAssessment(
-            status="error",
-            reason="unable to verify remote branch state",
-            detail=remote_exists.stderr.strip(),
-        )
+    # Remote branch not in merged list - check whether it still exists. After a
+    # successful prune-fetch the local origin/<branch> ref is authoritative, so
+    # use it; otherwise fall back to a live ls-remote (and only trust it on
+    # success).
+    if refs_fresh:
+        remote_gone = not has_git_ref(bare_repo, remote_ref)
+    else:
+        remote_exists = run_git(["ls-remote", "--heads", "origin", branch], cwd=bare_repo)
+        if remote_exists.returncode != 0:
+            return BranchDeleteAssessment(
+                status="error",
+                reason="unable to verify remote branch state",
+                detail=remote_exists.stderr.strip(),
+            )
+        remote_gone = not remote_exists.stdout.strip()
 
-    remote_gone = not remote_exists.stdout.strip()
     if remote_gone and local_ancestor.returncode == 0:
         return BranchDeleteAssessment(status="delete", reason="remote branch gone, local merged")
     if remote_gone:
@@ -1109,6 +1251,8 @@ def _delete_local_branch(
     branch: str,
     force: bool,
     default_remote_ref: str | None,
+    merged_refs: set[str] | None = None,
+    refs_fresh: bool = False,
 ) -> str:
     """Delete the local branch whose worktree was just removed.
 
@@ -1125,13 +1269,15 @@ def _delete_local_branch(
         return "deleted"
 
     if force:
-        # -D was requested explicitly and still failed → genuine error.
+        # -D was requested explicitly and still failed -> genuine error.
         print(f"  {Color.RED}FAIL{Color.RESET} branch delete: {br_result.stderr.strip()}")
         return "error"
 
     # Safe delete (-d) refused. Investigate whether the branch is actually
     # merged before deciding between force-delete, keep, or error.
-    assessment = _assess_local_branch_delete(bare_repo, branch, default_remote_ref)
+    assessment = _assess_local_branch_delete(
+        bare_repo, branch, default_remote_ref, merged_refs, refs_fresh
+    )
     if assessment.status == "delete":
         return _force_delete_branch(bare_repo, branch, assessment.reason)
     if assessment.status == "keep":
@@ -1147,8 +1293,13 @@ def _describe_remove_dry_run(
     delete_branch: bool,
     delete_remote: bool,
     default_remote_ref: str | None,
+    merged_refs: set[str] | None = None,
 ) -> str:
-    """Describe what cmd_remove would do without mutating worktrees or branches."""
+    """Describe what cmd_remove would do without mutating worktrees or branches.
+
+    Dry-run does not fetch, so the local remote-tracking refs may be stale; it
+    therefore uses a live ls-remote (``refs_fresh=False``) for remote existence.
+    """
     message = f"  {wt.branch}: worktree will be removed"
     if not delete_branch or not wt.branch or wt.branch.startswith("(detached"):
         return message
@@ -1159,7 +1310,7 @@ def _describe_remove_dry_run(
             message += " + remote branch will be deleted"
         return message
 
-    assessment = _assess_local_branch_delete(bare_repo, wt.branch, default_remote_ref)
+    assessment = _assess_local_branch_delete(bare_repo, wt.branch, default_remote_ref, merged_refs)
     if assessment.status == "delete":
         message += f" + local branch will be deleted ({assessment.reason})"
         if delete_remote:
@@ -1244,8 +1395,11 @@ def cmd_remove(
 
     if dry_run:
         default_remote_ref: str | None = None
+        merged_refs: set[str] | None = None
         if delete_branch and not force:
             default_remote_ref = get_default_remote_ref(bare_repo)
+            if default_remote_ref is not None:
+                merged_refs = _merged_remote_refs(bare_repo, default_remote_ref)
         if delete_branch:
             print()
             for wt in target_list:
@@ -1257,6 +1411,7 @@ def cmd_remove(
                         delete_branch,
                         delete_remote,
                         default_remote_ref,
+                        merged_refs,
                     )
                 )
         print()
@@ -1274,11 +1429,18 @@ def cmd_remove(
             print("Aborted.")
             return 1
 
-    # Fetch before branch deletion so local knows about remote merges
+    # Fetch before branch deletion so local knows about remote merges. When the
+    # fetch succeeds, the local origin/* refs are authoritative (refs_fresh), so
+    # remote-branch existence is checked locally instead of via a per-branch
+    # ls-remote network call. merged_refs is computed once and reused per branch.
     default_remote_ref: str | None = None
+    merged_refs: set[str] | None = None
+    refs_fresh = False
     if delete_branch:
-        run_git(["fetch", "--all", "--prune"], cwd=bare_repo)
+        refs_fresh = run_git(["fetch", "--all", "--prune"], cwd=bare_repo).returncode == 0
         default_remote_ref = get_default_remote_ref(bare_repo)
+        if default_remote_ref is not None:
+            merged_refs = _merged_remote_refs(bare_repo, default_remote_ref)
 
     print()
 
@@ -1321,7 +1483,9 @@ def cmd_remove(
 
         # Delete local branch if requested
         if delete_branch and wt.branch and not wt.branch.startswith("(detached"):
-            branch_status = _delete_local_branch(bare_repo, wt.branch, force, default_remote_ref)
+            branch_status = _delete_local_branch(
+                bare_repo, wt.branch, force, default_remote_ref, merged_refs, refs_fresh
+            )
             if branch_status == "error":
                 fail_count += 1
             elif branch_status == "kept":
