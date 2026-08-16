@@ -115,14 +115,12 @@ kkamji-lab/
 │   ├── domain-resource-tracer/ # Route53 → AWS 리소스 추적
 │   ├── eks-token-cache/        # EKS 토큰 캐시 스크립트
 │   ├── gcloud-pick/            # gcloud CLI auth + ADC 동시 전환 (gp)
-│   ├── git-worktree-tool/      # Git worktree 관리 CLI
 │   ├── kube-pick/              # kubeconfig 컨텍스트 선택/전환
 │   ├── kubectx-kubens/         # kubectx/kubens 셸 함수 (fzf+캐시)
 │   ├── kubeconfig-cleaner/     # 미사용 cluster/user 정리
 │   ├── kubeconfig-merger/      # kubeconfig 병합
 │   ├── markdown-fmt/           # README 헤더 번호 정리
 │   ├── mirror-container-images/# 컨테이너 이미지 미러링
-│   ├── pull-request-jump/      # PR 페이지 오픈 CLI
 │   ├── route53-traffic-monitor/# Route53 가중치 트래픽 모니터
 │   └── swagger-loadgen/        # Swagger 기반 부하 생성 도구
 └── README.md
@@ -144,11 +142,9 @@ kkamji-lab/
 |------|---------|--------|
 | domain-resource-tracer | `drt` | `domain_tracer.cli:app` |
 | gcloud-pick | `gcloud-pick` | `gcloud_pick.cli:main` |
-| git-worktree-tool | `wt` | `wt.cli:main` |
 | kube-pick | `kubepick` | `kube_pick.cli:main` |
 | kubeconfig-cleaner | `kubeconfig-cleaner` | `kubeconfig_cleaner.cli:main` |
 | kubeconfig-merger | `kubeconfig-merger` | `kubeconfig_merger.cli:main` |
-| pull-request-jump | `prj` | `pull_request_jump.cli:main` |
 | route53-traffic-monitor | `dnsmon` | `dns_monitor.cli:app` |
 | swagger-loadgen | `swagger-loadgen` | `swagger_loadgen.cli:app` |
 

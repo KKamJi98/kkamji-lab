@@ -27,14 +27,12 @@
 ├── tools/
 │   ├── domain-resource-tracer/ # Route53 → AWS 리소스 추적
 │   ├── eks-token-cache/        # EKS 토큰 캐시 스크립트
-│   ├── git-worktree-tool/      # Git worktree bare repo 관리 CLI
 │   ├── kube-pick/              # kubeconfig 컨텍스트 선택/전환
 │   ├── kubectx-kubens/         # kubectx/kubens 셸 함수 (fzf+캐시)
 │   ├── kubeconfig-cleaner/     # 미사용 cluster/user 정리
 │   ├── kubeconfig-merger/      # kubeconfig 병합
 │   ├── markdown-fmt/           # README 헤더 번호 정리
 │   ├── mirror-container-images/# 컨테이너 이미지 ECR 미러링
-│   ├── pull-request-jump/      # PR 페이지 오픈 CLI
 │   ├── route53-traffic-monitor/# Route53 가중치 트래픽 모니터
 │   └── swagger-loadgen/        # Swagger 기반 부하 생성 도구
 └── README.md
@@ -63,11 +61,9 @@
 | 도구 | 명령어 | 목적 | Python |
 | --- | --- | --- | --- |
 | domain-resource-tracer | `drt` | Route53 도메인에서 연결된 AWS 리소스(ALB, CloudFront 등) 추적 | 3.11+ |
-| git-worktree-tool | `wt` | Git worktree bare repository 관리 CLI | 3.9+ |
 | kube-pick | `kubepick` | 여러 kubeconfig 파일 중 원하는 컨텍스트 선택/전환 | 3.9+ |
 | kubeconfig-cleaner | `kubeconfig-cleaner` | 미사용 cluster/user 엔트리 정리 | 3.9+ |
 | kubeconfig-merger | `kubeconfig-merger` | 여러 kubeconfig 파일을 하나로 병합 | 3.9+ |
-| pull-request-jump | `prj` | CLI에서 GitHub/Bitbucket PR 페이지 자동 열기 | 3.9+ |
 | route53-traffic-monitor | `dnsmon` | Route53 가중치 레코드의 설정 비율 vs 실제 트래픽 실시간 비교 | 3.11+ |
 | swagger-loadgen | `swagger-loadgen` | Swagger/OpenAPI 스펙에서 GET endpoint 자동 수집 후 고정 TPS 부하 생성 | 3.11+ |
 
@@ -79,6 +75,15 @@
 | kubectx-kubens | kubectx/kubens 대체 zsh 셸 함수 (fzf+캐시 기반) | `tools/kubectx-kubens/README.md` |
 | markdown-fmt | study README 헤더 번호 자동 정리 | `tools/markdown-fmt/` |
 | mirror-container-images | crane 기반 컨테이너 이미지 ECR 미러링 | `tools/mirror-container-images/README.md` |
+
+### 독립한 도구
+
+여기서 시작해 자체 저장소로 옮긴 도구들입니다. 히스토리를 그대로 가져갔고 PyPI에 배포됩니다.
+
+| 도구 | 명령어 | 저장소 | 설치 |
+| --- | --- | --- | --- |
+| wtree (구 git-worktree-tool) | `wt` | [KKamJi98/wtree](https://github.com/KKamJi98/wtree) | `uv tool install wtree` |
+| prjump (구 pull-request-jump) | `prj` | [KKamJi98/prjump](https://github.com/KKamJi98/prjump) | `uv tool install prjump` |
 
 ---
 
@@ -92,10 +97,10 @@ cd kkamji-lab
 # 원하는 스터디로 이동
 cd study/cilium-study
 
-# Python CLI 도구 설치 (예: git-worktree-tool)
-cd tools/git-worktree-tool
+# Python CLI 도구 설치 (예: kube-pick)
+cd tools/kube-pick
 uv tool install .
-wt --help
+kubepick --help
 ```
 
 각 스터디/도구의 상세 절차는 해당 README를 따르세요.
