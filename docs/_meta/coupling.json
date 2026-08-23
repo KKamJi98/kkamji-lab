@@ -1,0 +1,14 @@
+{
+  "$comment": [
+    "A PR that changes a mapped path must change the mapped document too.",
+    "Values are fnmatch globs against repo-root-relative paths.",
+    "The entry point table is declared in pyproject.toml, so that is the honest pairing.",
+    "repo-layout.md has no mapping: the tree goes stale when directories appear, and no",
+    "single file glob captures that. The index, frontmatter, link, and freshness checks",
+    "still govern it.",
+    "study/** is coursework, not repo-owned documentation. Not mapped."
+  ],
+  "docs/rules/implementation-standards.md": [
+    "tools/*/pyproject.toml"
+  ]
+}

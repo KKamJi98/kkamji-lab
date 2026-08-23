@@ -1,0 +1,42 @@
+name: "Docs lint"
+
+# This repository had no workflows. The docs wiki gate needs a pull_request trigger
+# because coupling and freshness diff against a base ref, and a pull request is the
+# only place that base is meaningful here.
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "tools/*/pyproject.toml"
+      - ".github/workflows/docs-lint.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Lint repo docs wiki
+        env:
+          DOCS_BASE_REF: ${{ github.event_name == 'pull_request' && github.base_ref || '' }}
+        run: |
+          if [ -n "$DOCS_BASE_REF" ]; then
+            git fetch --no-tags origin "$DOCS_BASE_REF"
+            python3 docs/_meta/docs_lint.py --root . --base "origin/$DOCS_BASE_REF"
+          else
+            python3 docs/_meta/docs_lint.py --root .
+          fi
