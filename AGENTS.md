@@ -6,6 +6,19 @@
 
 ---
 
+## Knowledge Layout
+
+- **Current structure, decisions, rules**: `docs/`. Catalog is `docs/index.md`. Read it before changing code.
+- **Work journal and backlog**: vault `workspaces/`.
+- **Cross-repo knowledge**: vault `wiki/`, `shapes/`, `runbooks/`.
+- Frontmatter requires exactly four keys: `title`, `updated`, `type`, `status`. Register every new document in `docs/index.md`.
+- No wikilinks. Relative markdown links only.
+- When code mapped in `docs/_meta/coupling.json` changes, change the mapped document in the same PR.
+- Never hand-edit `docs/_meta/docs_lint.py`. Canonical copy is `kkamji-settings/agents/docs-wiki/docs_lint.py`.
+- Lint: `python3 docs/_meta/docs_lint.py --root .`
+
+---
+
 ## 0. Project Overview
 
 ### 0.1 Purpose
@@ -99,89 +112,13 @@
 
 ## 4. Directory Structure
 
-```
-kkamji-lab/
-├── .claude/                    # Agent settings
-├── .codex/                     # Codex skills
-├── packer/                     # Packer 이미지 빌드 실험
-│   └── eks-1.34/
-├── study/                      # 기술 스터디 및 실습
-│   ├── aws/                    # AWS 실험 (Kinesis)
-│   ├── ci-cd-study/            # GitOps/ArgoCD CI/CD 스터디
-│   ├── cilium-study/           # Cilium CNI 스터디
-│   ├── istio-study/            # Istio 서비스 메시 스터디
-│   └── jenkins/                # Jenkins Operator 실습
-├── tools/                      # CLI 도구 및 셸 함수
-│   ├── domain-resource-tracer/ # Route53 → AWS 리소스 추적
-│   ├── eks-token-cache/        # EKS 토큰 캐시 스크립트
-│   ├── gcloud-pick/            # gcloud CLI auth + ADC 동시 전환 (gp)
-│   ├── kube-pick/              # kubeconfig 컨텍스트 선택/전환
-│   ├── kubectx-kubens/         # kubectx/kubens 셸 함수 (fzf+캐시)
-│   ├── kubeconfig-cleaner/     # 미사용 cluster/user 정리
-│   ├── kubeconfig-merger/      # kubeconfig 병합
-│   ├── markdown-fmt/           # README 헤더 번호 정리
-│   ├── mirror-container-images/# 컨테이너 이미지 미러링
-│   ├── route53-traffic-monitor/# Route53 가중치 트래픽 모니터
-│   └── swagger-loadgen/        # Swagger 기반 부하 생성 도구
-└── README.md
-```
+- 디렉터리 트리는 `docs/architecture/repo-layout.md` 가 정본이다.
 
 ---
 
 ## 5. Implementation Standards
 
-### 5.1 Python (tools/)
-- Package manager: **uv**
-- Build backend: **hatchling**
-- Lint/Format: **ruff** (모든 도구에서 공통)
-- Python version: 3.9+ (일부 도구는 3.11+)
-- Verification: `uv run ruff check . && uv run ruff format --check . && uv run pytest`
-
-**도구별 entry point:**
-| Tool | Command | Script |
-|------|---------|--------|
-| domain-resource-tracer | `drt` | `domain_tracer.cli:app` |
-| gcloud-pick | `gcloud-pick` | `gcloud_pick.cli:main` |
-| kube-pick | `kubepick` | `kube_pick.cli:main` |
-| kubeconfig-cleaner | `kubeconfig-cleaner` | `kubeconfig_cleaner.cli:main` |
-| kubeconfig-merger | `kubeconfig-merger` | `kubeconfig_merger.cli:main` |
-| route53-traffic-monitor | `dnsmon` | `dns_monitor.cli:app` |
-| swagger-loadgen | `swagger-loadgen` | `swagger_loadgen.cli:app` |
-
-### 5.2 Go
-- Propagate `context.Context` to all I/O paths
-- Error handling: `errors.Is/As`, `errors.Join`, no panic
-- Prefer small interfaces (consumer-side)
-- Verification: `go fmt ./... && go test ./...` (run inside each module dir)
-
-### 5.3 Terraform
-- Use `-target` sparingly; prefer full plan cycles
-- **apply/destroy are manual only**
-
-| Action | Command | Agent |
-|--------|---------|-------|
-| Format | `terraform fmt -check` | OK |
-| Validate | `terraform validate` | OK |
-| Plan | `terraform plan` | OK |
-| Apply | `terraform apply` | Manual |
-| Destroy | `terraform destroy` | Manual |
-
-### 5.4 Docker
-- Multi-stage builds for production
-- Pin versions, no `latest` in production
-- Security: non-root user, minimal base image
-- Lint: `hadolint Dockerfile`
-
-### 5.5 Shell/Bash
-- POSIX-compatible when possible
-- Error handling: `set -euo pipefail`
-- Quote variables: `"$var"` not `$var`
-- Lint: `shellcheck script.sh`
-
-### 5.6 Make/Just
-- Many study modules include `Makefile` or `justfile`.
-- Treat them as the source of truth for local commands.
-- Inspect targets before running; avoid destructive targets without approval.
+- 언어/도구별 표준과 entry point 표는 `docs/rules/implementation-standards.md` 가 정본이다.
 
 ---
 
