@@ -124,7 +124,7 @@
 
 ## 6. CI/CD
 
-No CI/CD configuration detected.
+GitHub Actions runs the docs-lint workflow in `.github/workflows/docs-lint.yml` for documentation changes on pull requests and `main` pushes. It validates the repository docs and does not deploy infrastructure.
 
 ---
 
