@@ -95,14 +95,28 @@ def _adc_type_and_email(adc_file: Path) -> tuple[str, str]:
     return data.get("type", ""), data.get("client_email", "")
 
 
-def _print_adc_access_token() -> str:
-    """Mint an ADC access token via gcloud (network). Empty string on failure."""
+def _print_adc_access_token(adc_file: Optional[Path] = None) -> str:
+    """Mint an ADC access token for a specific ADC file. Empty string on failure.
+
+    gcloud resolves ADC from GOOGLE_APPLICATION_CREDENTIALS when that variable is
+    set, and this tool is what sets it. Pointing it at the file we are asking
+    about keeps the answer about that file: without this the token comes from
+    whichever ADC the ambient environment names, so introspecting a freshly
+    written default credential returns the identity of the previously exported
+    per-account file (or fails outright when that file has expired).
+    """
+    env = os.environ.copy()
+    if adc_file is None:
+        env.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+    else:
+        env["GOOGLE_APPLICATION_CREDENTIALS"] = str(adc_file)
     try:
         result = subprocess.run(
             ["gcloud", "auth", "application-default", "print-access-token"],
             capture_output=True,
             text=True,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -140,7 +154,7 @@ def resolve_adc_account(adc_file: Optional[Path] = None) -> Optional[str]:
     adc_type, email = _adc_type_and_email(adc_file)
     if adc_type == "service_account":
         return email or None
-    token = _print_adc_access_token()
+    token = _print_adc_access_token(adc_file)
     if not token:
         return None
     return _tokeninfo_email(token) or None

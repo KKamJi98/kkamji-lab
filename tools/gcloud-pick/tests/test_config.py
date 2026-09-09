@@ -68,7 +68,12 @@ def test_resolve_user_cred_uses_token_introspection(fake_gcloud_home, tmp_path, 
     adc = tmp_path / "user.json"
     adc.write_text(json.dumps({"type": "authorized_user", "refresh_token": "x"}))
     received = []
-    monkeypatch.setattr(cfgmod, "_print_adc_access_token", lambda: "tok123")
+    minted_for = []
+    monkeypatch.setattr(
+        cfgmod,
+        "_print_adc_access_token",
+        lambda adc_file=None: minted_for.append(adc_file) or "tok123",
+    )
     monkeypatch.setattr(
         cfgmod,
         "_tokeninfo_email",
@@ -76,13 +81,55 @@ def test_resolve_user_cred_uses_token_introspection(fake_gcloud_home, tmp_path, 
     )
     assert resolve_adc_account(adc) == "ethan.kim@bunjang.co.kr"
     assert received == ["tok123"]
+    # The token must be minted for the file being asked about, not ambient ADC.
+    assert minted_for == [adc]
 
 
 def test_resolve_returns_none_when_token_fails(fake_gcloud_home, tmp_path, monkeypatch):
     adc = tmp_path / "user.json"
     adc.write_text(json.dumps({"type": "authorized_user"}))
-    monkeypatch.setattr(cfgmod, "_print_adc_access_token", lambda: "")
+    monkeypatch.setattr(cfgmod, "_print_adc_access_token", lambda adc_file=None: "")
     assert resolve_adc_account(adc) is None
+
+
+def test_token_minting_targets_the_requested_adc_file(tmp_path, monkeypatch):
+    """The subprocess env must name the file, so an exported ADC cannot win."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["env"] = kwargs.get("env")
+
+        class R:
+            returncode = 0
+            stdout = "tok\n"
+
+        return R()
+
+    monkeypatch.setattr(cfgmod.subprocess, "run", fake_run)
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/stale/exported.json")
+
+    target = tmp_path / "fresh.json"
+    assert cfgmod._print_adc_access_token(target) == "tok"
+    assert seen["env"]["GOOGLE_APPLICATION_CREDENTIALS"] == str(target)
+
+
+def test_token_minting_drops_exported_adc_when_no_file_given(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["env"] = kwargs.get("env")
+
+        class R:
+            returncode = 0
+            stdout = "tok\n"
+
+        return R()
+
+    monkeypatch.setattr(cfgmod.subprocess, "run", fake_run)
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/stale/exported.json")
+
+    assert cfgmod._print_adc_access_token() == "tok"
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in seen["env"]
 
 
 def test_resolve_returns_none_when_file_missing(fake_gcloud_home, tmp_path):

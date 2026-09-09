@@ -131,11 +131,20 @@ def _prompt_yes_no(question: str) -> bool:
 
 
 def _run_adc_login() -> int:
-    """Run the interactive ADC login. Returns the gcloud exit code."""
+    """Run the interactive ADC login. Returns the gcloud exit code.
+
+    GOOGLE_APPLICATION_CREDENTIALS is dropped for the login: gcloud writes to the
+    default ADC location regardless, and leaving the variable set only makes it
+    warn that the file it is writing is not the one in the environment and ask
+    for a confirmation.
+    """
+    env = os.environ.copy()
+    env.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
     try:
         result = subprocess.run(
             ["gcloud", "auth", "application-default", "login"],
             check=False,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError) as e:
         console.print(f"[red]Failed to run gcloud: {e}[/red]")
