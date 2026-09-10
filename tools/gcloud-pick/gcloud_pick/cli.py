@@ -31,6 +31,12 @@ console = Console(stderr=True)
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    argv = ["--help" if arg == "-help" else arg for arg in argv]
+    # The wrapper prepends this internal transport flag before user arguments.
+    user_start = 1 if argv[:1] == ["--shell-state"] else 0
+    if argv[user_start : user_start + 1] == ["login"]:
+        argv[user_start] = "--login"
     parser = argparse.ArgumentParser(
         prog="gcloud-pick",
         description="gcloud-pick - switch gcloud CLI auth and ADC together",
@@ -47,14 +53,18 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         const="",
         default=None,
         metavar="CONFIG",
-        help="Run ADC login and save a per-account ADC file (optionally verify against CONFIG)",
+        help="Log in to gcloud CLI and ADC for CONFIG (default: current configuration)",
     )
+    parser.add_argument("--shell-state", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.login is not None and args.config is not None:
+        parser.error("use login [CONFIG] or --login [CONFIG], without another configuration")
+    return args
 
 
 def display_configurations(configs: list[GcloudConfig], current: Optional[str]) -> None:
@@ -130,8 +140,8 @@ def _prompt_yes_no(question: str) -> bool:
         return False
 
 
-def _run_adc_login() -> int:
-    """Run the interactive ADC login. Returns the gcloud exit code.
+def _run_adc_login(cfg: GcloudConfig) -> int:
+    """Log in to the selected CLI account and update ADC in the same flow.
 
     GOOGLE_APPLICATION_CREDENTIALS is dropped for the login: gcloud writes to the
     default ADC location regardless, and leaving the variable set only makes it
@@ -140,11 +150,13 @@ def _run_adc_login() -> int:
     """
     env = os.environ.copy()
     env.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+    env.pop("CLOUDSDK_CORE_ACCOUNT", None)
     try:
         result = subprocess.run(
-            ["gcloud", "auth", "application-default", "login"],
+            ["gcloud", "auth", "login", cfg.account, "--configuration", cfg.name, "--update-adc"],
             check=False,
             env=env,
+            stdout=sys.stderr,
         )
     except (OSError, subprocess.SubprocessError) as e:
         console.print(f"[red]Failed to run gcloud: {e}[/red]")
@@ -153,9 +165,13 @@ def _run_adc_login() -> int:
 
 
 def _do_login(config_name: str) -> int:
-    """Run ADC login and save a per-account ADC file."""
-    if _run_adc_login() != 0:
-        console.print("[red]ADC login failed or was cancelled.[/red]")
+    """Log in to CLI and ADC, then save only a matching per-account ADC file."""
+    cfg = next((c for c in list_configurations() if c.name == config_name), None)
+    if cfg is None or not cfg.account:
+        console.print("[red]Login requires an existing configuration with a core/account.[/red]")
+        return 1
+    if _run_adc_login(cfg) != 0:
+        console.print("[red]CLI/ADC login failed or was cancelled.[/red]")
         return 1
 
     default_adc = gcloud_dir() / "application_default_credentials.json"
@@ -164,13 +180,9 @@ def _do_login(config_name: str) -> int:
         console.print("[red]Could not resolve the ADC account after login.[/red]")
         return 1
 
-    if config_name:
-        cfg = validate_selection(config_name, list_configurations())
-        if cfg and cfg.account and cfg.account != account:
-            console.print(
-                f"[yellow]Account mismatch: ADC logged in as {account}, "
-                f"but config '{config_name}' uses {cfg.account}.[/yellow]"
-            )
+    if cfg.account != account:
+        console.print("[red]Account mismatch: ADC does not match the selected configuration.[/red]")
+        return 1
 
     dest = adc_path_for(account)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -181,12 +193,13 @@ def _do_login(config_name: str) -> int:
     return 0
 
 
-def _switch(cfg: GcloudConfig) -> int:
+def _switch(cfg: GcloudConfig, shell_state: bool = False) -> int:
     """Write the shared profile and print export commands for a configuration."""
     if cfg.account and adc_exists(cfg.account):
         adc_path = adc_path_for(cfg.account)
     elif cfg.account and _prompt_yes_no(f"Set up ADC for {cfg.account} now? (opens gcloud login)"):
-        _do_login(cfg.name)
+        if _do_login(cfg.name) != 0:
+            return 1
         if adc_exists(cfg.account):
             adc_path = adc_path_for(cfg.account)
         else:
@@ -203,7 +216,10 @@ def _switch(cfg: GcloudConfig) -> int:
         console.print(f"[dim]Run 'gp --login {cfg.name}' to create one.[/dim]")
 
     write_shared_profile(cfg.name, adc_path)
-    print(generate_export_commands(cfg.name, adc_path))
+    if shell_state:
+        print(f"gcloud-pick-state-v1\n{cfg.name}\n{adc_path if adc_path is not None else '-'}")
+    else:
+        print(generate_export_commands(cfg.name, adc_path))
 
     account = cfg.account or "(none)"
     console.print(f"[green]Switched to[/green] [bold]{cfg.name}[/bold] [dim]({account})[/dim]")
@@ -217,7 +233,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         args = parse_args(argv)
 
         if args.login is not None:
-            return _do_login(args.login)
+            config_name = args.login or current_config() or ""
+            if _do_login(config_name) != 0:
+                return 1
+            cfg = next(c for c in list_configurations() if c.name == config_name)
+            return _switch(cfg, args.shell_state)
 
         configs = list_configurations()
         if not configs:
@@ -230,14 +250,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             if cfg is None:
                 console.print(f"[red]Unknown configuration: {args.config}[/red]")
                 return 1
-            return _switch(cfg)
+            return _switch(cfg, args.shell_state)
 
         display_configurations(configs, current_config())
         cfg = get_user_selection(configs)
         if cfg is None:
             logger.info("No selection made")
             return 1
-        return _switch(cfg)
+        return _switch(cfg, args.shell_state)
 
     except Exception as e:  # noqa: BLE001
         console.print(f"[red]Error: {e}[/red]")
